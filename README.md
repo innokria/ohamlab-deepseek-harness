@@ -1,79 +1,99 @@
-# ohamlab-harness
+# DeepSeek Harness
 
-*[English](README.md) | [简体中文](README.zh.md)*
+English | [中文](README.zh.md)
 
-A DeepSeek Harness (DSH) plugin that lets users **search for and install other plugins directly from the web GUI** — no need to drop to a command line.
+DeepSeek Harness (`dsh`) is an open-source agent harness developed by [DeepSeek AI](https://deepseek.com).
 
-It adds a **"Plugin market"** tab under **Settings → Plugins**:
+It uses an architecture where **everything is a plugin**, and is powered by [Cordis](https://github.com/cordiverse/cordis), whose design is described in [_A Programming Paradigm for Spatiotemporal Composability_](https://github.com/cordiverse/paper).
 
-- 🔍 Search GitHub repositories tagged [`dsh-plugin`](https://github.com/topics/dsh-plugin) (sorted by stars)
-- 📋 Show each plugin's name, description, and star count, with a link to its GitHub repo
-- ⚡ One-click install (internally runs `dsh plugin --profile web add github:owner/repo`)
-- 🗑️ One-click uninstall of installed third-party plugins
-- 📦 List the plugins currently installed in the profile (`dsh.profile.bundles`)
+## use Docker and entrypoint.sh file to load
+## CUSTOM LLM AGENT  
 
-## Install
+```
+WITH LLAMA CPP and Custom GGUF .  RUNNING ON 2 CORE 16GB CPU 
+```
 
-Install it like any other DSH bundle:
+```
+DeepSeek Harness + llama.cpp
+==========================================================
+[DSH] Home:              /data
+[DSH] Public port:      7860
+[DSH] Internal port:    3080
+
+[LLAMA] Server:         /app/llama-server
+[LLAMA] Host:           127.0.0.1
+[LLAMA] Port:           8000
+[LLAMA] Model:          LFM2.5
+[LLAMA] Model path:     /app/LFM2.5-VL-3B-Q4_0.gguf
+[LLAMA] MMProj path:    /app/mmproj-LFM2.5-VL-3B-BF16.gguf
+[LLAMA] Context:        22288
+[LLAMA] Max tokens:     512
+[LLAMA] Threads:        2
+```
+
+## UI With Ox Alpha
+<img width="1408" height="658" alt="image" src="https://github.com/user-attachments/assets/7460b85f-da82-4703-8005-ea2b609a80cc" />
+
+
+
+<img width="2349" height="1410" alt="image" src="https://github.com/user-attachments/assets/4f699c11-33cb-4ab0-9548-3b2db811463d" />
+
+
+
+```
+<img width="2349" height="1410" alt="image" src="https://github.com/user-attachments/assets/0ee7e6ba-751d-4c09-899c-b8b777b6b90f" />
+
+````
+
+
+## Developer preview
+
+DeepSeek Harness is currently in _developer preview_ and is iterating rapidly. **THERE WILL BE COMPATIBILITY-BREAKING CHANGES.**
+
+## Run
+
+### Run from `npm`
+
+Install `Node.js`, then run:
 
 ```sh
-# Install into your web profile straight from GitHub
-dsh plugin --profile web add github:innokria/ohamlab-deepseek-harness
-
-# Restart the web GUI to activate it
-dsh web
+npx @deepseek-ai/dsh web
 ```
 
-Or from a local checkout:
+The command starts the Web UI at `http://127.0.0.1:3080` by default and opens it in the default browser for a local launch. An SSH launch only prints the host URL because the SSH client or editor owns the local forwarded address. Pass `--no-open` to run the server without opening a browser. See [Web UI guide](docs/user/guide/index.md).
+
+### Run from source
+
+To run from a repository checkout:
 
 ```sh
-dsh plugin --profile web add ./dsh-plugin-market
+git clone https://github.com/deepseek-ai/deepseek-harness.git
+cd deepseek-harness
+pnpm install
+pnpm run build
+pnpm dsh web
 ```
 
-> **Note:** this plugin is plain JavaScript with **no `prepare` build script**, so a
-> `github:` install needs no `allowedBuilds` entry — it works out of the box.
+`pnpm run build` prepares the repository artifacts. `pnpm dsh web` uses those built artifacts without rebuilding.
 
-## Directory layout
+## Community and support
 
-```
-dsh-plugin-market/
-├── package.json        # dsh.bundle (patch layer) + dsh.client (browser half) declaration
-├── cordis.patch.yml    # inserts the loader row into the composition
-├── index.js            # Host half: registers the /api/plugin-market HTTP bridge + search/install/uninstall
-└── client.js           # Client half: Settings "Plugin market" tab UI
-```
+- Feel free to submit feedback or bug reports through [GitHub Discussions](https://github.com/deepseek-ai/deepseek-harness/discussions).
+- Add the [`dsh-plugin`](https://github.com/topics/dsh-plugin) topic to your plugin repository for discoverability.
+- Join <a href="https://discord.gg/Ycq5dCaS4">DeepSeek Harness Discord community</a>.
 
-## How it works
+## Contributing
 
-- **Host half** (`index.js`): injects the `webServer` service and registers a same-origin
-  prefix route `/api/plugin-market`:
-  - `GET  /api/plugin-market/search?q=<keyword>` — calls the GitHub Search API (`topic:dsh-plugin`)
-  - `POST /api/plugin-market/install` (body `{ "spec": "github:owner/repo" }`) — runs `dsh plugin add`
-  - `GET  /api/plugin-market/list` — reads the profile's `dsh.profile.bundles`
-  - `POST /api/plugin-market/remove` (body `{ "name": "…" }`) — runs `dsh plugin remove`
-- **Client half** (`client.js`): registers the "Plugin market" page into the `settings.plugins.tab`
-  slot and calls the HTTP bridge over same-origin `fetch`, rendering the search box, result list,
-  install/uninstall buttons, and the installed list.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Because the bridge lives on the port the web GUI itself listens on (same origin), there is no
-cross-origin issue and no change to the framework's own Remote descriptors.
+## Development
 
-## Publishing your own fork
+Start with the [development guide](docs/development.md) and [architecture documentation](docs/architecture.md).
 
-Push this repo to your own GitHub and tag it with [`dsh-plugin`](https://github.com/topics/dsh-plugin)
-so other users' plugin markets can find it. You can also publish to npm:
-
-```sh
-npm publish --access public
-```
-
-## Security note
-
-Installing a third-party plugin runs its author's code on your machine (a `prepare` script may run
-at install time, and the bundle is loaded at runtime). Only install plugins from sources you trust,
-and pin to a commit (`github:owner/repo#<sha>`) when you want to prevent upstream changes from
-silently altering behavior.
+For agents, follow [AGENTS.md](AGENTS.md).
 
 ## License
 
-MIT
+[MIT](LICENSE)
+
+Third-party dependencies and their licenses are disclosed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
