@@ -353,3 +353,30 @@ The project is ready for its first complete release when:
 **Product definition**
 
 OhamLab is a complete, installable AI workspace that combines DeepSeek Harness, Agent Lab, Search MCP and OhamLab's own branding and extensions under one installation and management experience.
+
+
+
+
+## My proposed release roadmap
+Release	Deliverable
+OhamLab 0.1	Unified Harness + Agent Lab + Search
+OhamLab 0.2	Shared LLM routing and stable API
+OhamLab Browser Agent 0.1	Chrome sidebar with webpage understanding
+OhamLab 0.3	Embedding memory and RAG
+OhamLab Browser Agent 0.2	Controlled browser automation
+
+These are suggested versions, not existing releases.
+5. One issue to resolve now: CLI naming
+Your architecture proposes publishing a new PyPI distribution called ohamlab, with commands such as ohamlab init, ohamlab setup, and ohamlab start. Pasted text.txt
+
+
+But your existing ohamlab-agent package already installs an executable named ohamlab.
+
+That's a potential conflict.
+
+I would avoid having two packages install the same console command. Instead, the unified Harness should own the ohamlab CLI, while the Search package exposes its functions through imports or MCP. This requires a coordinated migration of the existing Search CLI, rather than simply adding another console-script entry point.
+
+Also check whether the proposed ohamlab PyPI distribution name is available before committing to that name.
+6. What I would do next
+Don't build the Chrome extension today. First make sure the Unified Harness can perform this end-to-end task:
+"Read this webpage, search for additional information, and explain the findings using my selected free LLM provider."
