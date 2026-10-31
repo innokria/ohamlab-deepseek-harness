@@ -359,11 +359,11 @@ OhamLab is a complete, installable AI workspace that combines DeepSeek Harness, 
 
 ## My proposed release roadmap
 Release	Deliverable
-OhamLab 0.1	Unified Harness + Agent Lab + Search
-OhamLab 0.2	Shared LLM routing and stable API
-OhamLab Browser Agent 0.1	Chrome sidebar with webpage understanding
-OhamLab 0.3	Embedding memory and RAG
-OhamLab Browser Agent 0.2	Controlled browser automation
+- [] OhamLab 0.1	Unified Harness + Agent Lab + Search
+- [] OhamLab 0.2	Shared LLM routing and stable API
+- [] OhamLab Browser Agent 0.1	Chrome sidebar with webpage understanding
+- [] OhamLab 0.3	Embedding memory and RAG
+- [] OhamLab Browser Agent 0.2	Controlled browser automation
 
 These are suggested versions, not existing releases.
 5. One issue to resolve now: CLI naming
