@@ -1,0 +1,34 @@
+# OhamLab Search MCP — local stdio integration for DeepSeek Harness.
+# This patch registers the @deepseek-ai/dsh-mcp-client plugin with a dedicated
+# server name so the model can invoke tools via the public name
+# mcp__ohamlab_search__web_search.
+#
+# Transport: stdio — launches the `ohamlab` CLI executable with the `search`
+# subcommand. The executable is resolved from the runtime PATH (installed by
+# `pip install ohamlab-agent`).
+#
+# No remote URL, no API key, no external credentials required.
+# The executable binary is determined at runtime from the process PATH; in
+# Docker / CI this is the `ohamlab` binary provided by the ohamlab-agent wheel.
+#
+# After applying this patch (`dsh --profile web`), the model can call:
+#   /mcp__ohamlab_search__web_search {"query": "Python FastAPI documentation", "max_results": 5}
+
+- insert:
+    - id: ohamlab-search-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: ohamlab_search
+        transport: stdio
+        command: ohamlab
+        args:
+          - search
+        env: {}
+        cwd: !!js process.cwd()
+        toolCallTimeoutMs: 60000
+        failOnStartupError: false
+        reconnect:
+          enabled: true
+          initialDelayMs: 500
+          maxDelayMs: 30000
+          maxAttempts: 10
