@@ -1,85 +1,107 @@
-Skill documentation — usage, discovery, schema, error handling, no fabrication
-markdown
-Copy
 
-# OhamLab Search Skill
+---
+name: ohamlab-web-search
+description: Use OhamLab Search for web searches, website retrieval, stored document discovery and research.
+---
 
-## When to use OhamLab Search
-Use this skill when the model needs to find publicly available information
-about a topic, tool, library, or concept. OhamLab Search queries the web
-without involving an LLM — it is a direct, deterministic search over indexed
-public pages.
+# OhamLab Web Search
 
-Typical use cases:
-- Looking up documentation for a Python package, framework, or library.
-- Finding installation guides, API references, or tutorials.
-- Verifying the existence or status of a project, repository, or service.
-- Discovering examples, blog posts, or technical write-ups.
+## Purpose
 
-Do not use OhamLab Search for private, authenticated, or paid-content sources.
-The search is limited to publicly indexable pages.
+OhamLab Search provides web research and information retrieval capabilities.
 
-## Discovering the actual MCP search tool
-The OhamLab Agent Lab MCP server (started via `ohamlab mcp-stdio`) exposes the
-following JSON‑RPC tool:
+Use the installed `ohamlab-agent` package and its verified CLI.
 
-Tool: web_search Signature: web_search(query: str, max_results: int = 5) -> list[dict]
-Copy
+## Installation
 
+```bash
+python -m pip install ohamlab-agent --break-system-packages
+```
 
-The tool is registered under the public name `mcp__ohamlab_search__web_search` through the DSH MCP client bridge.
+## Verified CLI
 
-## Calling the tool using its real schema
-```json
-{
-  "name": "mcp__ohamlab_search__web_search",
-  "arguments": {
-    "query": "Python FastAPI documentation",
-    "max_results": 5
-  }
-}
+The following installation and command have been tested:
 
-The tool accepts:
+```bash
+which ohamlab
 
-    query (required, string) — the search term.
-    max_results (optional, integer, default 5, max 10) — maximum number of results to return.
+ohamlab search "Python FastAPI documentation" --max-results 5
+```
 
-The tool returns a list of result objects, each containing:
+Expected executable:
 
-    title (string) — the page title.
-    url (string) — the canonical URL of the result.
-    snippet (string) — a short excerpt from the page.
+`/usr/local/bin/ohamlab`
 
-Example successful response:
-json
-Copy
+## Search capabilities
 
-[
-  {
-    "title": "Tutorial - User Guide - FastAPI",
-    "url": "https://fastapi.tiangolo.com/tutorial/",
-    "snippet": "This tutorial shows you how to use FastAPI with most of its features, step by step."
-  },
-  {
-    "title": "FastAPI Tutorial - GeeksforGeeks",
-    "url": "https://www.geeksforgeeks.org/python/fastapi-tutorial/",
-    "snippet": "Jun 20, 2026 · This section covers the essentials of getting started with FastAPI, including..."
-  }
-  /* ... more results ... */
-]
+Use OhamLab Search for:
 
-Handling errors and empty results
+- Web search.
+- Website retrieval.
+- Research and information discovery.
+- Finding authoritative documentation.
+- Retrieving relevant sources.
+- Supporting Agent Lab research tasks.
 
-    If the query is empty or whitespace-only, the tool raises ValueError.
-    If the search engine returns no matching pages, the tool returns an empty list []. This is a genuine empty result — do not fabricate entries.
-    If the underlying MCP transport fails, the tool result carries an isError flag and a descriptive text.
-    Network errors, timeouts, or DDGS failures are surface as error strings; the model should treat these as "no results" rather than inventing URLs or titles.
+## Search workflow
 
-Why search results must never be fabricated
+1. Understand the user's question.
+2. Search using the `ohamlab` CLI.
+3. Retrieve relevant pages when necessary.
+4. Cross-check important findings.
+5. Preserve source URLs.
+6. Summarize the results.
 
-The OhamLab Search tool is a direct wrapper around the DuckDuckGo text search API (ddgs.text). It returns only results that the search engine actually found. The harness and the skill explicitly prohibit inventing titles, URLs, or snippets. Fabricating search results violates the trust boundary between the model and the external data source.
-Registering the skill
+## Python subprocess execution
 
-This skill is registered with the DSH skill loader. It is discovered through the standard skill registry and invoked via the /mcp__ohamlab_search__web_search tool. No separate CLI command is needed from the agent — the model calls the MCP tool directly.
+When Harness needs to invoke OhamLab Search programmatically, use Python subprocess.
 
-The skill definition lives at: vendor/ohamlab/skills/web-search/SKILL.md
+Example:
+
+```python
+import subprocess
+
+result = subprocess.run(
+    [
+        "ohamlab",
+        "search",
+        "Python FastAPI documentation",
+        "--max-results",
+        "5",
+    ],
+    capture_output=True,
+    text=True,
+    timeout=120,
+)
+
+if result.returncode == 0:
+    print(result.stdout)
+else:
+    print(result.stderr)
+```
+
+## Search rules
+
+- Prefer official documentation and primary sources.
+- Never fabricate search results.
+- Preserve original source URLs.
+- Do not claim a website was retrieved unless it was actually fetched.
+- Avoid unnecessary repeated searches.
+- Clearly distinguish verified facts from assumptions.
+
+## Integration with Agent Lab
+
+For complex research:
+
+1. Use OhamLab Search to collect information.
+2. Delegate analysis to OhamLab Agent Lab.
+3. Have specialist agents examine independent topics.
+4. Consolidate findings into a final report.
+
+## Safety
+
+- Do not expose API keys or credentials.
+- Validate user-provided search arguments.
+- Use execution timeouts.
+- Avoid shell=True.
+- Capture execution errors.
