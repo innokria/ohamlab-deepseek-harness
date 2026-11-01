@@ -76,3 +76,19 @@ Show the execution trace:
 
 Do not invent any tool calls, agents, or results. If either component is unavailable, identify the failed step.
 ```
+
+
+## Some more
+```
+# 1. Boot the web profile
+dsh --profile web
+
+# 2. Test search (model can now call this)
+/mcp__ohamlab_search__web_search {"query": "Python FastAPI documentation", "max_results": 5}
+
+# 3. List agents
+/mcp__ohamlab_agent_lab__list_agents {}
+
+# 4. Run an agent
+/mcp__ohamlab_agent_lab__run_agent {"agent_id": "2fbcfeecd0f14c8cb98c2f47d5641b5c", "task": "Explain what FastAPI is in two sentences."}
+```
