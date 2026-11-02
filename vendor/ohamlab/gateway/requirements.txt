@@ -1,0 +1,4 @@
+mcp>=1.9,<2
+httpx>=0.27,<1
+ohamlab-agent==0.1.2
+ohamlab-agent-lab==7.0.0

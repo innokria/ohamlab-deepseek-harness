@@ -1,0 +1,11 @@
+# Illustrative only: verify the active Cordis patch schema in your checkout.
+- insert:
+    - id: mcp-ohamlab-unified
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: ohamlab
+        transport: stdio
+        command: python
+        args:
+          - -u
+          - /app/deepseek-harness/ohamlab/vendor/ohamlab/gateway/server.py
