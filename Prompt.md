@@ -1,3 +1,22 @@
+
+## New test
+
+```
+Run a complete end-to-end OhamLab integration test.
+
+1. Discover and list all installed OhamLab skills and callable MCP tools. Identify tools for web search, agent creation, agent listing, agent execution, and task results. Do not invent tools.
+2. Use the actual OhamLab web search tool to search for the latest Python AI agent frameworks. Return 3 real results with titles, URLs, and summaries.
+3. Create an OhamLab Agent Lab agent named Python Researcher with the role Research Python AI frameworks.
+4. List agents and verify that Python Researcher was created, including its agent ID.
+5. Assign the research findings to Python Researcher and execute a task comparing LangGraph, CrewAI, and AutoGen. Return the actual execution result.
+6. If supported, retrieve the task status and persisted result.
+7. Report which MCP tools were invoked, whether remote or local execution was used if verifiable, and any errors.
+8. Produce a PASS/FAIL report for skill discovery, MCP connectivity, web search, agent creation, agent listing, agent execution, task results, and remote-to-local fallback. Mark fallback NOT TESTED unless an actual failover was observed.
+
+Use real tools, not simulated outputs. Do not ask me to configure MCP manually. If a tool is missing, clearly report it and continue testing what is available.
+```
+
+
 ## PROMOT TO ASK HARNESS
 ```
 You are testing the OhamLab v0.1 integration.
