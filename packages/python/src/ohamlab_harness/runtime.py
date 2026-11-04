@@ -1,42 +1,52 @@
-"""Run the upstream Harness web server with an isolated data directory."""
-from __future__ import annotations
+"""Cross-platform executable discovery and Harness launcher."""
 import os
-from pathlib import Path
-import shlex
+import shutil
 import subprocess
-import threading
-import time
-import urllib.request
-import webbrowser
-from .installer import InstallError
+import sys
+from pathlib import Path
 
-def start(home: Path, *, command: str="pnpm dsh web", host: str="127.0.0.1", port: int=3080, open_browser: bool=False):
-    home=home.expanduser().resolve()
-    app=home/"app"
-    if not (app/"package.json").is_file():
-        raise InstallError(f"Harness not installed at {app}. Run 'ohamlab-harness install' first.")
-    if not (home/"data"/"skills"/"web-search"/"SKILL.md").is_file():
-        raise InstallError("OhamLab skills missing; rerun installation")
-    env=os.environ.copy()
-    env.update({"DSH_HOME":str(home/"data"),"DSH_HOST":host,"DSH_PORT":str(port),"PORT":str(port)})
-    venv_bin=home/"python-env"/("Scripts" if os.name=="nt" else "bin")
-    if venv_bin.is_dir():
-        env["PATH"]=str(venv_bin)+os.pathsep+env.get("PATH","")
-        env["OHAM_PYTHON"]=str(venv_bin/("python.exe" if os.name=="nt" else "python"))
-    argv=shlex.split(command,posix=os.name!="nt")
-    if not argv:
-        raise InstallError("Empty startup command")
-    url=f"http://{host}:{port}"
-    print(f"[OHAMLAB] Starting Harness at {url}",flush=True)
-    print("[OHAMLAB] MCP gateway registration must be configured and verified separately.",flush=True)
-    if open_browser:
-        def open_when_ready():
-            for _ in range(40):
-                try:
-                    with urllib.request.urlopen(url,timeout=1):
-                        webbrowser.open(url)
-                        return
-                except Exception:
-                    time.sleep(1)
-        threading.Thread(target=open_when_ready,daemon=True).start()
-    return subprocess.call(argv,cwd=app,env=env)
+
+def default_home():
+    return Path(os.environ.get("OHAMLAB_HARNESS_HOME", Path.home() / ".ohamlab-harness")).expanduser().resolve()
+
+
+def executable(name):
+    found = shutil.which(name)
+    if found:
+        return found
+    if os.name == "nt":
+        for suffix in (".cmd", ".exe", ".bat"):
+            found = shutil.which(name + suffix)
+            if found:
+                return found
+    return None
+
+
+def require_tools(*names):
+    missing = [name for name in names if not executable(name)]
+    if missing:
+        raise RuntimeError("Missing required executables: " + ", ".join(missing) + ". Install Node.js 22+, pnpm, and Git as appropriate.")
+
+
+def run(args, cwd=None, env=None):
+    print("[OHAMLAB]", " ".join(map(str, args)), flush=True)
+    subprocess.run(list(map(str, args)), cwd=cwd, env=env, check=True)
+
+
+def start(home=None, host=None, port=None, trusted_host=None):
+    home = Path(home) if home else default_home()
+    app = home / "app"
+    if not (app / "package.json").is_file():
+        raise RuntimeError(f"Harness not installed at {app}. Run 'ohamlab-harness install'.")
+    require_tools("node", "pnpm")
+    host = host or os.environ.get("DSH_HOST", "127.0.0.1")
+    port = str(port or os.environ.get("DSH_PORT", "3080"))
+    trusted_host = trusted_host or os.environ.get("DSH_TRUSTED_HOST")
+    cmd = [executable("pnpm"), "dsh", "web", "--host", host, "--port", port, "--no-open"]
+    if trusted_host:
+        cmd += ["--trusted-host", trusted_host]
+    env = os.environ.copy()
+    env.setdefault("DSH_HOME", str(home / "data"))
+    Path(env["DSH_HOME"]).mkdir(parents=True, exist_ok=True)
+    print(f"[OHAMLAB] Serving Harness at http://{host}:{port}", flush=True)
+    return subprocess.call(cmd, cwd=app, env=env)

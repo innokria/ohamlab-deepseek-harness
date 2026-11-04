@@ -1,85 +1,73 @@
-"""Fetch and build an isolated Harness runtime, without modifying the source repository."""
-from __future__ import annotations
+"""Install the same tagged GitHub sources used by the known-working Docker build."""
 import os
-from pathlib import Path
 import shutil
 import subprocess
-import sys
-import venv
+import tempfile
+from pathlib import Path
 
-REPO_URL = "https://github.com/innokria/ohamlab-deepseek-harness.git"
-SKILLS = ("web-search", "agent-lab", "research-workflow")
+from .runtime import default_home, executable, require_tools, run
 
-class InstallError(RuntimeError):
-    pass
+REPO = "https://github.com/innokria/ohamlab-deepseek-harness.git"
 
-def run(argv, *, cwd=None, env=None):
-    print("+", " ".join(map(str, argv)), flush=True)
-    subprocess.run([str(x) for x in argv], cwd=cwd, env=env, check=True)
 
-def require(binary):
-    found = shutil.which(binary)
-    if not found:
-        raise InstallError(f"Missing executable: {binary}. Install it and retry.")
-    return found
-
-def git_checkout(url: str, ref: str, destination: Path):
-    if destination.exists():
-        raise InstallError(f"Refusing to overwrite existing directory: {destination}")
-    run([require("git"), "clone", "--no-checkout", url, destination])
-    run(["git", "-C", destination, "checkout", ref])
-
-def install_skills(source: Path, target: Path):
-    target.mkdir(parents=True, exist_ok=True)
-    for skill in SKILLS:
-        src = source / skill
-        if not (src / "SKILL.md").is_file():
-            raise InstallError(f"Required skill missing: {src / 'SKILL.md'}")
-        shutil.copytree(src, target / skill, dirs_exist_ok=True)
-        print(f"[OHAMLAB] Installed skill: {skill}")
-
-def install(home: Path, *, repo_url: str=REPO_URL, harness_ref: str="1.0", vendor_ref: str="main", vendor_path: Path|None=None, skip_python: bool=False):
-    require("git"); require("node"); require("pnpm")
-    home = home.expanduser().resolve()
-    home.mkdir(parents=True, exist_ok=True)
+def install(home=None, repo=None, harness_tag=None, integration_tag=None, force=False):
+    require_tools("git", "node", "pnpm")
+    home = Path(home).expanduser().resolve() if home else default_home()
+    repo = repo or os.environ.get("OHAMLAB_REPO_URL", REPO)
+    harness_tag = harness_tag or os.environ.get("OHAMLAB_HARNESS_TAG", "1.0")
+    integration_tag = integration_tag or os.environ.get("OHAMLAB_INTEGRATION_TAG", "2.0")
     app = home / "app"
-    if app.exists():
-        raise InstallError(f"Harness already installed at {app}. Remove it manually to reinstall; no automatic overwrite.")
-    git_checkout(repo_url, harness_ref, app)
-    if not (app / "package.json").is_file():
-        raise InstallError("Selected Harness ref has no package.json at repository root")
-    vendor_dest = app / "vendor" / "ohamlab"
-    if vendor_path:
-        vendor_src = vendor_path.expanduser().resolve()
-        if not vendor_src.is_dir():
-            raise InstallError(f"Vendor directory missing: {vendor_src}")
-    else:
-        vendor_repo = home / "vendor-checkout"
-        git_checkout(repo_url, vendor_ref, vendor_repo)
-        vendor_src = vendor_repo / "vendor" / "ohamlab"
-        if not vendor_src.is_dir():
-            raise InstallError(f"Vendor integration missing: {vendor_src}")
-    vendor_dest.parent.mkdir(parents=True,exist_ok=True)
-    if vendor_dest.exists():
-        shutil.rmtree(vendor_dest)
-    shutil.copytree(vendor_src,vendor_dest)
-    if not vendor_path:
-        shutil.rmtree(home / "vendor-checkout")
-    requirements = vendor_dest / "gateway" / "requirements.txt"
-    if not requirements.is_file():
-        raise InstallError(f"Gateway requirements missing: {requirements}")
-    run(["pnpm", "install", "--frozen-lockfile"],cwd=app)
-    run(["pnpm", "run", "build"],cwd=app)
-    branding = vendor_dest / "plugins" / "harness-brand"
-    if branding.is_dir():
-        run(["pnpm", "dsh", "plugin", "--profile", "web", "add", branding], cwd=app)
-    if not skip_python:
-        venv_dir=home / "python-env"
-        venv.EnvBuilder(with_pip=True).create(venv_dir)
-        python=venv_dir / ("Scripts/python.exe" if os.name=="nt" else "bin/python")
-        run([python,"-m","pip","install","-r",requirements])
-        run([python,"-m","pip","install","ohamlab-agent==0.1.2","ohamlab-agent-lab==7.0.0"])
-    install_skills(vendor_dest / "skills", home / "data" / "skills")
-    print(f"[OHAMLAB] Installed into {home}")
-    print("[OHAMLAB] Next: ohamlab-harness doctor && ohamlab-harness start")
+    plugin = home / "plugins" / "harness-brand"
+    if app.exists() and not force:
+        raise RuntimeError(f"{app} already exists; use --force to reinstall (existing app will be replaced).")
+    home.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="ohamlab-build-", dir=home) as temp:
+        tmp = Path(temp)
+        source = tmp / "app"
+        integration = tmp / "integration"
+        run(["git", "clone", "--branch", harness_tag, "--depth", "1", repo, source])
+        run(["git", "clone", "--branch", integration_tag, "--depth", "1", "--filter=blob:none", "--sparse", repo, integration])
+        run(["git", "sparse-checkout", "set", "vendor/ohamlab"], cwd=integration)
+        vendor = integration / "vendor" / "ohamlab"
+        requirements = vendor / "gateway" / "requirements.txt"
+        branding = vendor / "plugins" / "harness-brand"
+        skills = vendor / "skills"
+        for required in (requirements, branding, skills):
+            if not required.exists():
+                raise RuntimeError(f"Required integration file missing: {required}")
+        target_vendor = source / "ohamlab" / "vendor" / "ohamlab"
+        target_vendor.parent.mkdir(parents=True, exist_ok=True)
+        if target_vendor.exists():
+            shutil.rmtree(target_vendor)
+        shutil.copytree(vendor, target_vendor)
+        plugin_target = tmp / "harness-brand"
+        shutil.copytree(branding, plugin_target)
+        python = os.environ.get("OHAM_PYTHON") or os.environ.get("PYTHON") or __import__("sys").executable
+        run([python, "-m", "pip", "install", "-r", requirements])
+        run([python, "-m", "pip", "install", "ohamlab-agent==0.1.2", "ohamlab-agent-lab[server]==7.0.0"])
+        run([python, "-m", "pip", "check"])
+        run([executable("pnpm"), "install"], cwd=source)
+        run([executable("pnpm"), "run", "build"], cwd=source)
+        # Replace only after the entire new installation has built successfully.
+        old_app = home / "app.previous"
+        if old_app.exists():
+            shutil.rmtree(old_app)
+        if app.exists():
+            app.rename(old_app)
+        try:
+            shutil.move(str(source), str(app))
+            plugin.parent.mkdir(parents=True, exist_ok=True)
+            if plugin.exists():
+                shutil.rmtree(plugin)
+            shutil.copytree(plugin_target, plugin)
+            run([executable("pnpm"), "dsh", "plugin", "--profile", "web", "add", plugin], cwd=app)
+        except Exception:
+            if app.exists():
+                shutil.rmtree(app)
+            if old_app.exists():
+                old_app.rename(app)
+            raise
+        if old_app.exists():
+            shutil.rmtree(old_app)
+    print(f"[OHAMLAB] Installed at {app}")
     return app
