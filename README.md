@@ -92,6 +92,50 @@ Start with the [development guide](docs/development.md) and [architecture docume
 
 For agents, follow [AGENTS.md](AGENTS.md).
 
+
+# OhamLab Harness — PyPI release candidate
+
+**Local-first CLI and browser UI launcher.** The existing `vendor/ohamlab` source is deliberately **not included** in this archive. Merge this repository overlay into your existing GitHub repo. No personal Hugging Face files are included.
+
+## Requirements
+
+- Python 3.10+
+- Git
+- Node.js 22+
+- pnpm (for example `corepack enable` then `corepack prepare pnpm@11.7.0 --activate`)
+- Internet access for first installation
+
+## Test locally before publishing
+
+```bash
+python -m pip install -e packages/python
+python -m pip install pytest build twine
+python -m pytest tests -q
+python -m build packages/python
+python -m twine check packages/python/dist/*
+ohamlab-harness --version
+ohamlab-harness install
+ohamlab-harness doctor
+ohamlab-harness start --open-browser
+```
+
+By default, `install` clones the **1.0** branch for the upstream Harness application and **main** for your vendor integration. This matches the prior Docker layout but is NOT a reproducible production release. For a pinned build, use `--harness-ref <sha> --vendor-ref <sha>`. To install from your current local vendor directory instead, use `--vendor-path /path/to/vendor/ohamlab`.
+
+## Startup and MCP integration
+
+The launcher defaults to `pnpm dsh web` in the installed Harness directory. This command has not been confirmed against your exact Harness release. If needed, pass `--start-command 'YOUR VERIFIED COMMAND'`. Skills are copied to the data directory and Python gateway dependencies installed into a dedicated virtual environment.
+
+**Critical:** The current launcher does not automatically register the MCP gateway with Cordis. It does not yet provide remote-to-local MCP failover or guarantee LLM-powered Agent Lab execution. Your existing working Harness registration/setup must be ported and tested before advertising one-command fully integrated MCP support.
+
+## Packaging and publishing
+
+Builds are produced by `.github/workflows/release.yml`. The PyPI workflow is **manual** (`workflow_dispatch`) and requires configuring PyPI Trusted Publishing for this GitHub repository and `pypi` environment. The version is `0.1.0b1`. Before publishing, verify the package name, license, upstream redistribution permissions, Node startup, and end-to-end tools on a clean machine. Do not publish solely on the basis of Python unit tests.
+
+## Browser support
+
+`ohamlab-harness start` serves a local browser UI. Public hosted browser service and extension are separate later phases. Do not bind the service to a public address without access controls.
+
+
 ## License
 
 [MIT](LICENSE)

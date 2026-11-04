@@ -1,0 +1,13 @@
+services:
+  harness:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    ports:
+      - "3080:3080"
+    volumes:
+      - harness-data:/data/dsh
+    environment:
+      HARNESS_START_CMD: ${HARNESS_START_CMD:?Set HARNESS_START_CMD in .env}
+volumes:
+  harness-data:

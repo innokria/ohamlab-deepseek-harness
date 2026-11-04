@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ohamlab-harness"
+version = "0.1.0b1"
+description = "Installer and launcher for OhamLab DeepSeek Harness"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Proprietary - verify repository license before publication"}
+authors = [{name = "OhamLab"}]
+keywords = ["agent", "mcp", "harness"]
+classifiers = ["Development Status :: 4 - Beta", "Programming Language :: Python :: 3", "Operating System :: OS Independent"]
+
+[project.scripts]
+ohamlab-harness = "ohamlab_harness.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
