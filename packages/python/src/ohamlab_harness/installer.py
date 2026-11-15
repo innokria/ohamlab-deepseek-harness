@@ -58,7 +58,7 @@ def validate_branding(plugin):
 def install(
     home: Path,
     *,
-    repo_url: str = REPO_URL,
+    repo_url: str = REPO,
     harness_ref: str = "1.0",
     vendor_ref: str = "main",
     vendor_path: Path | None = None,
