@@ -183,44 +183,40 @@ def install(home=None, repo=None, harness_tag=None,
 
             shutil.copytree(vendor, target_vendor)
 
-            # Prepare the complete branding package, including its build script.
-            if not branding.is_dir():
-                raise RuntimeError(f"Branding source missing: {branding}")
-
+            # Prepare the branding package.
             shutil.copytree(branding, plugin_target)
+
             manifest_path = plugin_target / "package.json"
+
             if not manifest_path.is_file():
-                raise RuntimeError(f"Branding package.json missing: {manifest_path}")
+                raise RuntimeError("Branding package.json is missing.")
 
             manifest = read_json(manifest_path)
+
             if manifest.get("name") != PLUGIN_NAME:
                 raise RuntimeError(
-                    f"Unexpected branding package name: {manifest.get('name')}"
+                    f"Unexpected branding package name: "
+                    f"{manifest.get('name')}"
                 )
 
-            build_command = manifest.get("scripts", {}).get("build")
-            if not build_command:
-                raise RuntimeError("Branding package has no build script")
+            # Reuse prebuilt branding files, otherwise build from source.
+            brand_index = plugin_target / "lib" / "index.js"
+            brand_client = plugin_target / "lib" / "client.js"
 
-            if "build.mjs" in build_command and not (plugin_target / "build.mjs").is_file():
-                available = sorted(
-                    str(p.relative_to(plugin_target))
-                    for p in plugin_target.rglob("*")
-                    if p.is_file() and "node_modules" not in p.parts
-                )
-                raise RuntimeError(
-                    "Harness Brand build.mjs is missing from the integration source.\n"
-                    f"Integration tag: {integration_tag}\n"
-                    f"Source: {branding}\n"
-                    f"Available files: {available}\n"
-                    "Commit build.mjs to this integration ref or fix package.json's build script."
-                )
+            if brand_index.is_file() and brand_client.is_file():
+                print("[OHAMLAB] Using prebuilt Harness Brand.")
+            else:
+                build_script = plugin_target / "build.mjs"
+                if not build_script.is_file():
+                    raise RuntimeError(
+                        "Harness Brand is missing both compiled lib files "
+                        "and build.mjs. Check the integration tag: "
+                        f"{integration_tag}"
+                    )
+                print("[OHAMLAB] Building Harness Brand...")
+                run([pnpm, "install"], cwd=plugin_target)
+                run([pnpm, "run", "build"], cwd=plugin_target)
 
-            print("[OHAMLAB] Installing branding dependencies...")
-            run([pnpm, "install"], cwd=plugin_target)
-
-            print("[OHAMLAB] Building branding package...")
-            run([pnpm, "run", "build"], cwd=plugin_target)
             validate_branding(plugin_target)
 
             # Install Python integrations.
