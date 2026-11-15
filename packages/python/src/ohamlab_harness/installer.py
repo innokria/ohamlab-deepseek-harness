@@ -54,301 +54,158 @@ def validate_branding(plugin):
     return manifest
 
 
-def install(home=None, repo=None, harness_tag=None,
-            integration_tag=None, force=False):
 
-    require_tools("git", "node", "pnpm")
+def install(
+    home: Path,
+    *,
+    repo_url: str = REPO_URL,
+    harness_ref: str = "1.0",
+    vendor_ref: str = "main",
+    vendor_path: Path | None = None,
+    skip_python: bool = False,
+):
+    require("git")
+    require("node")
+    require("pnpm")
 
-    pnpm = executable("pnpm")
-
-    home = (
-        Path(home).expanduser().resolve()
-        if home else default_home()
-    )
-
-    dsh_home = Path(
-        os.environ.get("DSH_HOME", home / "data")
-    ).expanduser().resolve()
-
-    repo = repo or os.environ.get("OHAMLAB_REPO_URL", REPO)
-
-    harness_tag = (
-        harness_tag
-        or os.environ.get("OHAMLAB_HARNESS_TAG", "1.0")
-    )
-
-    integration_tag = (
-        integration_tag
-        or os.environ.get("OHAMLAB_INTEGRATION_TAG", "2.0")
-    )
+    home = home.expanduser().resolve()
+    home.mkdir(parents=True, exist_ok=True)
 
     app = home / "app"
-    plugin = dsh_home / "plugins" / "harness-brand"
-    profile = dsh_home / "profiles" / "web"
-    profile_package = profile / "package.json"
+    data = Path(
+        os.environ.get("DSH_HOME", str(home / "data"))
+    ).expanduser().resolve()
 
-    if app.exists() and not force:
-        raise RuntimeError(
-            f"{app} already exists; use --force to reinstall."
+    data.mkdir(parents=True, exist_ok=True)
+
+    if app.exists():
+        raise InstallError(
+            f"Harness already installed: {app}"
         )
 
-    home.mkdir(parents=True, exist_ok=True)
-    dsh_home.mkdir(parents=True, exist_ok=True)
+    git_checkout(repo_url, harness_ref, app)
 
-    for directory in (
-        dsh_home / "plugins",
-        dsh_home / "profiles",
-        dsh_home / "sessions",
-        dsh_home / "cache",
-        dsh_home / "logs",
-    ):
-        directory.mkdir(parents=True, exist_ok=True)
-
-    # Keep backups until the new installation has passed verification.
-    backup_app = home / "app.previous"
-    backup_plugin = dsh_home / "plugins" / "harness-brand.previous"
-
-    if backup_app.exists():
-        raise RuntimeError(
-            f"Previous app backup already exists: {backup_app}. "
-            "Inspect or move it before reinstalling."
+    if not (app / "package.json").is_file():
+        raise InstallError(
+            "Harness package.json missing"
         )
 
-    if backup_plugin.exists():
-        raise RuntimeError(
-            f"Previous branding backup already exists: {backup_plugin}. "
-            "Inspect or move it before reinstalling."
+    vendor_dest = app / "vendor" / "ohamlab"
+
+    if vendor_path:
+        vendor_src = vendor_path.expanduser().resolve()
+        if not vendor_src.is_dir():
+            raise InstallError(
+                f"Vendor missing: {vendor_src}"
+            )
+    else:
+        vendor_repo = home / "vendor-checkout"
+        git_checkout(repo_url, vendor_ref, vendor_repo)
+        vendor_src = vendor_repo / "vendor" / "ohamlab"
+
+    if not vendor_src.is_dir():
+        raise InstallError(
+            f"Vendor integration missing: {vendor_src}"
         )
 
-    app_backed_up = False
-    plugin_backed_up = False
-    new_app_deployed = False
-    new_plugin_deployed = False
+    vendor_dest.parent.mkdir(
+        parents=True, exist_ok=True
+    )
 
-    try:
-        with tempfile.TemporaryDirectory(
-            prefix="ohamlab-build-", dir=home
-        ) as temp:
+    if vendor_dest.exists():
+        shutil.rmtree(vendor_dest)
 
-            tmp = Path(temp)
-            source = tmp / "app"
-            integration = tmp / "integration"
-            plugin_target = tmp / "harness-brand"
+    shutil.copytree(vendor_src, vendor_dest)
 
-            print("[OHAMLAB] Cloning Harness...")
+    if not vendor_path:
+        shutil.rmtree(home / "vendor-checkout")
 
-            run([
-                "git", "clone",
-                "--branch", harness_tag,
-                "--depth", "1",
-                repo, str(source),
-            ])
+    # Build the main Harness.
+    run(
+        ["pnpm", "install", "--frozen-lockfile"],
+        cwd=app,
+    )
+    run(["pnpm", "run", "build"], cwd=app)
 
-            print("[OHAMLAB] Cloning OhamLab integration...")
+    # Build OhamLab branding separately.
+    branding = vendor_dest / "plugins" / "harness-brand"
 
-            run([
-                "git", "clone",
-                "--branch", integration_tag,
-                "--depth", "1",
-                "--filter=blob:none",
-                "--sparse",
-                repo, str(integration),
-            ])
+    if not (branding / "package.json").is_file():
+        raise InstallError(
+            f"Brand plugin missing: {branding}"
+        )
 
-            run(
-                [
-                    "git", "sparse-checkout",
-                    "set", "vendor/ohamlab",
-                ],
-                cwd=integration,
+    if not (branding / "build.mjs").is_file():
+        raise InstallError(
+            "Brand plugin build.mjs missing. "
+            "Restore its build script before installation."
+        )
+
+    run(["pnpm", "install"], cwd=branding)
+    run(["pnpm", "run", "build"], cwd=branding)
+
+    for output in ("lib/index.js", "lib/client.js"):
+        if not (branding / output).is_file():
+            raise InstallError(
+                f"Brand build output missing: {output}"
             )
 
-            vendor = integration / "vendor" / "ohamlab"
-            requirements = vendor / "gateway" / "requirements.txt"
-            branding = vendor / "plugins" / "harness-brand"
-            skills = vendor / "skills"
+    # Install Python dependencies.
+    if not skip_python:
+        venv_dir = home / "python-env"
 
-            for required in (requirements, branding, skills):
-                if not required.exists():
-                    raise RuntimeError(
-                        f"Required integration file missing: {required}"
-                    )
+        venv.EnvBuilder(with_pip=True).create(venv_dir)
 
-            # Copy OhamLab integration into the Harness source.
-            target_vendor = source / "ohamlab" / "vendor" / "ohamlab"
-            target_vendor.parent.mkdir(parents=True, exist_ok=True)
+        python = venv_dir / (
+            "Scripts/python.exe"
+            if os.name == "nt"
+            else "bin/python"
+        )
 
-            if target_vendor.exists():
-                shutil.rmtree(target_vendor)
+        requirements = (
+            vendor_dest / "gateway" / "requirements.txt"
+        )
 
-            shutil.copytree(vendor, target_vendor)
-
-            # Prepare the branding package.
-            shutil.copytree(branding, plugin_target)
-
-            manifest_path = plugin_target / "package.json"
-
-            if not manifest_path.is_file():
-                raise RuntimeError("Branding package.json is missing.")
-
-            manifest = read_json(manifest_path)
-
-            if manifest.get("name") != PLUGIN_NAME:
-                raise RuntimeError(
-                    f"Unexpected branding package name: "
-                    f"{manifest.get('name')}"
-                )
-
-            # Build the branding package before deploying it.
-            print("[OHAMLAB] Building branding package...")
-
-            run([pnpm, "install"], cwd=plugin_target)
-
-            if "build" in manifest.get("scripts", {}):
-                run([pnpm, "run", "build"], cwd=plugin_target)
-
-            validate_branding(plugin_target)
-
-            # Install Python integrations.
-            python = (
-                os.environ.get("OHAM_PYTHON")
-                or os.environ.get("PYTHON")
-                or sys.executable
+        if not requirements.is_file():
+            raise InstallError(
+                f"Requirements missing: {requirements}"
             )
 
-            print("[OHAMLAB] Installing Python dependencies...")
+        run([
+            python, "-m", "pip", "install",
+            "-r", requirements
+        ])
 
-            run([
-                python, "-m", "pip",
-                "install", "-r", str(requirements),
-            ])
+        run([
+            python, "-m", "pip", "install",
+            "ohamlab-agent==0.1.2",
+            "ohamlab-agent-lab[server]==7.0.0",
+        ])
 
-            run([
-                python, "-m", "pip",
-                "install",
-                "ohamlab-agent==0.1.2",
-                "ohamlab-agent-lab[server]==7.0.0",
-            ])
+    # Install skills into actual DSH_HOME.
+    install_skills(
+        vendor_dest / "skills",
+        data / "skills",
+    )
 
-            run([python, "-m", "pip", "check"])
+    # Register the compiled brand plugin.
+    plugin_env = os.environ.copy()
+    plugin_env["DSH_HOME"] = str(data)
 
-            # Install Harness dependencies.
-            print("[OHAMLAB] Installing Harness dependencies...")
+    run(
+        [
+            "pnpm", "dsh", "plugin",
+            "--profile", "web",
+            "add", str(branding)
+        ],
+        cwd=app,
+        env=plugin_env,
+    )
 
-            run([pnpm, "install"], cwd=source)
-
-            # Back up the existing application and branding package.
-            if app.exists():
-                app.rename(backup_app)
-                app_backed_up = True
-
-            if plugin.exists():
-                plugin.rename(backup_plugin)
-                plugin_backed_up = True
-
-            # Deploy the new application.
-            shutil.move(str(source), str(app))
-            new_app_deployed = True
-
-            # Deploy branding into persistent DSH storage.
-            plugin.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(plugin_target, plugin)
-            new_plugin_deployed = True
-
-            validate_branding(plugin)
-
-            print(f"[OHAMLAB] Branding copied to {plugin}")
-
-            # Initialize the web profile if needed.
-            if not profile_package.exists():
-                print("[OHAMLAB] Initializing web profile...")
-
-                run(
-                    [
-                        pnpm, "dsh", "plugin",
-                        "--profile", "web",
-                        "add", str(plugin),
-                    ],
-                    cwd=app,
-                )
-
-            if not profile_package.is_file():
-                raise RuntimeError(
-                    f"Web profile was not created: {profile_package}"
-                )
-
-            # Ensure the profile references the persistent plugin path.
-            profile_data = read_json(profile_package)
-            dependencies = profile_data.setdefault("dependencies", {})
-
-            dependencies[PLUGIN_NAME] = f"link:{plugin}"
-
-            write_json(profile_package, profile_data)
-
-            print(
-                f"[OHAMLAB] Profile dependency: "
-                f"{PLUGIN_NAME} -> {plugin}"
-            )
-
-            # Install the profile dependencies.
-            print("[OHAMLAB] Installing web profile plugins...")
-
-            run([pnpm, "install"], cwd=profile)
-
-            # Verify that pnpm installed the linked package.
-            installed_plugin = (
-                profile / "node_modules" / "@ohamlab" / "harness-brand"
-            )
-
-            if not installed_plugin.exists():
-                raise RuntimeError(
-                    "Branding plugin was not installed in the web profile: "
-                    f"{installed_plugin}"
-                )
-
-            validate_branding(installed_plugin)
-
-            print("[OHAMLAB] Branding profile dependency verified.")
-
-            # Build Harness after the client plugin is registered.
-            print("[OHAMLAB] Building Harness with OhamLab branding...")
-
-            run(
-                [pnpm, "run", "build"],
-                cwd=app,
-            )
-
-            print("[OHAMLAB] Harness build completed.")
-
-        # Keep the old installation until all deployment checks pass.
-        if backup_app.exists():
-            shutil.rmtree(backup_app)
-
-        if backup_plugin.exists():
-            shutil.rmtree(backup_plugin)
-
-    except Exception:
-        print("[OHAMLAB] Installation failed. Restoring previous app...")
-
-        if new_app_deployed and app.exists():
-            shutil.rmtree(app)
-
-        if app_backed_up and backup_app.exists():
-            backup_app.rename(app)
-
-        if new_plugin_deployed and plugin.exists():
-            shutil.rmtree(plugin)
-
-        if plugin_backed_up and backup_plugin.exists():
-            backup_plugin.rename(plugin)
-
-        raise
-
-    print("========================================")
-    print("[OHAMLAB] Installation successful")
-    print(f"[OHAMLAB] Harness: {app}")
-    print(f"[OHAMLAB] Branding: {plugin}")
-    print(f"[OHAMLAB] Profile: {profile}")
-    print("========================================")
+    print("[OHAMLAB] Harness installed")
+    print("[OHAMLAB] Brand plugin built and registered")
+    print("[OHAMLAB] Python dependencies installed")
+    print(f"[OHAMLAB] DSH_HOME: {data}")
 
     return app
+
