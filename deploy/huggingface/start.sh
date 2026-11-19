@@ -1,553 +1,240 @@
 #!/usr/bin/env bash
-set -e
 
-# ==========================================================
-# Ensure standard system commands and Bash are discoverable
-# ==========================================================
+set -Eeuo pipefail
 
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-export SHELL="/bin/bash"
-export BASH="/bin/bash"
+# ============================================================
+# OHAMLAB HARNESS CONFIGURATION
+# ============================================================
 
-echo "Checking Bash availability..."
-
-# ==========================================================
-# Check common Bash locations
-# ==========================================================
-
-if [ -x /bin/bash ]; then
-    BASH_PATH="/bin/bash"
-elif [ -x /usr/bin/bash ]; then
-    BASH_PATH="/usr/bin/bash"
-else
-    echo "ERROR: Bash executable not found at /bin/bash or /usr/bin/bash"
-    exit 1
-fi
-
-echo "Bash found at: ${BASH_PATH}"
-"${BASH_PATH}" --version
-
-echo
-echo "PATH lookup:"
-command -v bash || true
-
-echo
-echo "Executable details:"
-ls -l /usr/bin/bash /bin/bash 2>/dev/null || true
-
-# ==========================================================
-# Verify Node.js can spawn Bash
-# ==========================================================
-
-echo
-echo "Checking Node.js Bash spawning..."
-
-node -e '
-const { spawnSync } = require("node:child_process");
-
-const result = spawnSync("bash", ["-lc", "echo BASH_SPAWN_OK"], {
-    env: {
-        ...process.env,
-        PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        SHELL: "/bin/bash",
-    },
-    encoding: "utf8",
-});
-
-if (result.error) {
-    console.error("Bash spawn failed:", result.error);
-    process.exit(1);
-}
-
-if (result.status !== 0) {
-    console.error("Bash exited with status:", result.status);
-    console.error(result.stderr);
-    process.exit(1);
-}
-
-console.log(result.stdout.trim());
-'
-
-echo
-echo "Bash verification completed."
-
-# ==========================================================
-# Continue with your existing startup code below this point
-# Do not remove your DSH startup, session backup, or Nginx code.
-# ==========================================================
-
-
-# Keep the rest of your existing start.sh below this line
-
-# ==========================================================
-# DeepSeek Harness 1.0
-# Hugging Face Space
-#
-# Architecture:
-#
-# Internet
-#    │
-#    ▼
-# nginx :7860
-#    │
-#    ▼
-# DSH :3080 (127.0.0.1 only)
-#    │
-#    ├── Western providers
-#    ├── Chinese providers
-#    ├── OpenRouter models
-#    └── Optional providers
-#
-# SESSION STORAGE:
-#
-# DSH writes sessions ONLY to local /tmp.
-#
-# Every 30 seconds:
-#
-#   /tmp/dsh-sessions
-#          │
-#          ▼
-#     tar.gz archive
-#          │
-#          ▼
-#   /data/dsh/session-backup.tar.gz
-#
-# On startup:
-#
-#   /data/dsh/session-backup.tar.gz
-#          │
-#          ▼
-#   /tmp/dsh-sessions
-#          │
-#          ▼
-#       DSH starts
-#
-# This avoids HF bucket hard-link / ENOTSUP problems while
-# preserving the native DSH session files.
-# ==========================================================
-
-set -u
-
-export DSH_HOME="${DSH_HOME:-/data/dsh}"
+export OHAMLAB_HARNESS_HOME="${OHAMLAB_HARNESS_HOME:-/app/ohamlab-harness}"
+# Keep active DSH data on a POSIX filesystem. HF bucket FUSE does not
+# support hard-link operations used by the session journal.
+export DSH_HOME=/data/dsh
+export OHAMLAB_PERSISTENT_DSH_HOME=/data/dsh
+export DSH_HOST="${DSH_HOST:-127.0.0.1}"
 export DSH_PORT="${DSH_PORT:-3080}"
 export PORT="${PORT:-7860}"
-export DSH_HOST="${DSH_HOST:-127.0.0.1}"
-export DSH_TRUSTED_HOST="${DSH_TRUSTED_HOST:-rahul7star-harnes-clone.hf.space}"
-export MCP_AUTH_REQUIRED="${MCP_AUTH_REQUIRED:-false}"
+
+INSTALL_MARKER="${DSH_HOME}/.ohamlab-installed-v2"
+export HARNS_BRAND_NAME="OhamLab"
 
 
-# ==========================================================
-# Session configuration
-# ==========================================================
+# ============================================================
+# DISABLE DSH SESSION TELEMETRY
+# ============================================================
 
-export DSH_LOCAL_SESSIONS="/tmp/dsh-sessions"
+export DSH_TELEMETRY_MODE="DISABLED"
+export DSH_TELEMETRY_OTLP_URL=""
+export OTEL_SDK_DISABLED="true"
 
-export DSH_SESSION_BACKUP_DIR="${DSH_HOME}/session-backup"
-
-export DSH_SESSION_BACKUP="${DSH_SESSION_BACKUP_DIR}/sessions.tar.gz"
-
-export DSH_SESSION_BACKUP_TMP="/tmp/dsh-session-backup.tar.gz.tmp"
-
-export DSH_SESSION_SYNC_INTERVAL="${DSH_SESSION_SYNC_INTERVAL:-1800}"
+echo "[OHAMLAB] Session telemetry disabled."
 
 
-echo
-echo "=========================================================="
-echo "DeepSeek Harness - OhamLab HF Space"
-echo "=========================================================="
-echo "[DSH] Repository:       innokria/deepseek-harness"
-echo "[DSH] Version:          1.0"
-echo "[DSH] DSH_HOME:         ${DSH_HOME}"
-echo "[DSH] Internal:         ${DSH_HOST}:${DSH_PORT}"
-echo "[DSH] Public:           0.0.0.0:${PORT}"
-echo "[DSH] Trusted host:     ${DSH_TRUSTED_HOST}"
-echo
-echo "[SESSION] Local:       ${DSH_LOCAL_SESSIONS}"
-echo "[SESSION] HF backup:   ${DSH_SESSION_BACKUP}"
-echo "[SESSION] Interval:    ${DSH_SESSION_SYNC_INTERVAL}s"
-echo
 
+# ============================================================
+# SESSION PERSISTENCE CONFIGURATION
+# ============================================================
 
-# ==========================================================
-# 1. Prepare persistent + local storage
-# ==========================================================
+# Harness session path
+SESSION_DIR="${DSH_HOME}/sessions"
+
+# Active sessions use local filesystem to support hard links
+LOCAL_SESSION_DIR="${OHAMLAB_LOCAL_SESSION_DIR:-/tmp/ohamlab-dsh-sessions}"
+
+# Persistent backup on Hugging Face storage
+BACKUP_DIR="${OHAMLAB_PERSISTENT_DSH_HOME}/session-backup"
+BACKUP_FILE="${BACKUP_DIR}/sessions.tar.gz"
+
+# Backup every hour
+BACKUP_INTERVAL=3600
+
+BACKUP_PID=""
+HARNESS_PID=""
 
 echo "=========================================================="
-echo "[1/8] Preparing storage"
+echo "[OHAMLAB] Starting OhamLab Harness"
 echo "=========================================================="
 
-mkdir -p "${DSH_HOME}"
+# ============================================================
+# PREPARE DIRECTORIES
+# ============================================================
 
 mkdir -p \
-    "${DSH_HOME}/profiles" \
     "${DSH_HOME}/plugins" \
-    "${DSH_HOME}/workspaces" \
+    "${DSH_HOME}/skills" \
+    "${DSH_HOME}/profiles" \
+    "${BACKUP_DIR}" \
     "${DSH_HOME}/cache" \
     "${DSH_HOME}/logs" \
-    "${DSH_HOME}/tmp"
+    "${LOCAL_SESSION_DIR}"
 
-mkdir -p "${DSH_SESSION_BACKUP_DIR}"
-
-# ----------------------------------------------------------
-# Sessions MUST use local container storage.
-# ----------------------------------------------------------
-
-# rm -rf "${DSH_LOCAL_SESSIONS}"
-
-# mkdir -p "${DSH_LOCAL_SESSIONS}"
-
-# rm -rf "${DSH_HOME}/sessions"
-
-# ln -s "${DSH_LOCAL_SESSIONS}" "${DSH_HOME}/sessions"
-
-
-mkdir -p "${DSH_HOME}" "${DSH_LOCAL_SESSIONS}"
-
-if [ -L "${DSH_HOME}/sessions" ]; then
-    TARGET=$(readlink "${DSH_HOME}/sessions")
-
-    if [ "${TARGET}" != "${DSH_LOCAL_SESSIONS}" ]; then
-        echo "[SESSION] ERROR: unexpected sessions symlink: ${TARGET}"
+# ============================================================
+# USE THE PERSISTENT PROFILE DIRECTLY (NO /tmp PROFILE COPY)
+# ============================================================
+echo "[OHAMLAB] DSH_HOME: ${DSH_HOME}"
+echo "[OHAMLAB] Standard CLI profile: ${DSH_HOME}/profiles/web"
+echo "[OHAMLAB] Requested alternate path: ${DSH_HOME}/web/profile"
+# The DSH CLI has demonstrably resolved profiles/web. Do not assume that
+# web/profile is a supported profile location or overwrite it.
+if [ -f "${DSH_HOME}/web/profile/package.json" ]; then
+    echo '[OHAMLAB] NOTE: /data/dsh/web/profile exists; CLI still uses profiles/web unless configured otherwise.'
+fi
+# HF storage cannot hard-link session journal files. Keep only sessions local.
+# Never delete or replace an existing persistent sessions directory automatically.
+if [ -L "${SESSION_DIR}" ]; then
+    if [ "$(readlink -f "${SESSION_DIR}")" != "$(readlink -f "${LOCAL_SESSION_DIR}")" ]; then
+        echo "[OHAMLAB] ERROR: Existing sessions symlink points elsewhere: ${SESSION_DIR}"
         exit 1
     fi
-
-elif [ -e "${DSH_HOME}/sessions" ]; then
-    echo "[SESSION] ERROR: sessions path already exists."
-    echo "[SESSION] Back up and migrate it before continuing."
+elif [ -e "${SESSION_DIR}" ]; then
+    echo "[OHAMLAB] ERROR: ${SESSION_DIR} is an existing directory on HF storage."
+    echo '[OHAMLAB] Existing data was NOT changed. Move it aside after backing it up, then restart.'
     exit 1
-
 else
-    ln -s "${DSH_LOCAL_SESSIONS}" "${DSH_HOME}/sessions"
+    ln -s "${LOCAL_SESSION_DIR}" "${SESSION_DIR}"
 fi
+printf test > "${LOCAL_SESSION_DIR}/.hardlink-test.tmp"
+ln "${LOCAL_SESSION_DIR}/.hardlink-test.tmp" "${LOCAL_SESSION_DIR}/.hardlink-test"
+rm -f "${LOCAL_SESSION_DIR}/.hardlink-test.tmp" "${LOCAL_SESSION_DIR}/.hardlink-test"
+echo '[OHAMLAB] PASS: local session hard-link test'
 
+# ============================================================
+# VERIFY DEPENDENCIES
+# ============================================================
 
+echo "[OHAMLAB] Checking dependencies..."
 
+python --version
+ohamlab-harness --version
 
-echo "[DSH] Persistent storage: ${DSH_HOME}"
-echo "[DSH] Session storage:     ${DSH_HOME}/sessions -> ${DSH_LOCAL_SESSIONS}"
+command -v tar >/dev/null || {
+    echo "[OHAMLAB] ERROR: tar is not installed."
+    exit 1
+}
 
-# ==========================================================
-# 1b. Restore previous DSH sessions
-# ==========================================================
-
-echo
-echo "=========================================================="
-echo "[SESSION] Restoring previous sessions"
-echo "=========================================================="
-
-if [ -f "${DSH_SESSION_BACKUP}" ]; then
-
-    echo "[SESSION] Backup found:"
-    echo "          ${DSH_SESSION_BACKUP}"
-
-    echo "[SESSION] Backup size:"
-    ls -lh "${DSH_SESSION_BACKUP}" || true
-
-    echo "[SESSION] Extracting..."
-
-    if tar \
-        -xzf "${DSH_SESSION_BACKUP}" \
-        -C "${DSH_LOCAL_SESSIONS}"
-    then
-
-        echo "[SESSION] Restore successful"
-
-    else
-
-        echo "[SESSION] WARNING: restore failed"
-        echo "[SESSION] Starting with empty local sessions"
-
-        rm -rf "${DSH_LOCAL_SESSIONS}"
-
-        mkdir -p "${DSH_LOCAL_SESSIONS}"
-
-    fi
-
-else
-
-    echo "[SESSION] No previous backup found"
-    echo "[SESSION] Starting with empty sessions"
-
-fi
-
-echo
-echo "[SESSION] Restored files:"
-
-find "${DSH_LOCAL_SESSIONS}" \
-    -maxdepth 3 \
-    -type f \
-    -print \
-    2>/dev/null \
-    | head -100 || true
-
-
-# ==========================================================
-# Session backup function
-# ==========================================================
-
-SESSION_BACKUP_RUNNING=0
+# ============================================================
+# SESSION BACKUP FUNCTION
+# ============================================================
 
 backup_sessions() {
 
-    # ------------------------------------------------------
-    # Don't allow overlapping backups.
-    # ------------------------------------------------------
+    local TEMP_BACKUP="/tmp/ohamlab-session-backup.$$.tar.gz"
 
-    if [ "${SESSION_BACKUP_RUNNING}" -eq 1 ]; then
-        return 0
-    fi
+    echo "[OHAMLAB] Creating session backup..."
 
-    SESSION_BACKUP_RUNNING=1
+    if tar -czf "${TEMP_BACKUP}" \
+        -C "$(dirname "${LOCAL_SESSION_DIR}")" \
+        "$(basename "${LOCAL_SESSION_DIR}")"; then
 
-    echo
-    echo "[SESSION] ================================================"
-    echo "[SESSION] Creating session backup"
-    echo "[SESSION] ================================================"
+        mv -f "${TEMP_BACKUP}" "${BACKUP_FILE}"
 
-    # ------------------------------------------------------
-    # Nothing to backup.
-    # ------------------------------------------------------
+        echo "[OHAMLAB] Session backup successful."
+        echo "[OHAMLAB] Backup: ${BACKUP_FILE}"
 
-    if [ ! -d "${DSH_LOCAL_SESSIONS}" ]; then
+    else
 
-        echo "[SESSION] Local session directory does not exist"
+        rm -f "${TEMP_BACKUP}"
 
-        SESSION_BACKUP_RUNNING=0
-
-        return 0
+        echo "[OHAMLAB] ERROR: Session backup failed."
+        return 1
 
     fi
+}
 
-    # ------------------------------------------------------
-    # Check whether there is anything inside.
-    # ------------------------------------------------------
+# ============================================================
+# RESTORE SESSIONS ON STARTUP
+# ============================================================
 
-    if ! find "${DSH_LOCAL_SESSIONS}" \
-        -mindepth 1 \
-        -print \
-        -quit \
-        | grep -q .
-    then
+restore_sessions() {
 
-        echo "[SESSION] No sessions yet"
+    if [ ! -f "${BACKUP_FILE}" ]; then
 
-        SESSION_BACKUP_RUNNING=0
-
+        echo "[OHAMLAB] No previous session backup found."
         return 0
 
     fi
 
-    # ------------------------------------------------------
-    # Create archive LOCALLY first.
-    #
-    # This is important.
-    #
-    # tar operates on /tmp, where normal filesystem semantics
-    # are available.
-    # ------------------------------------------------------
+    if [ -z "$(find "${LOCAL_SESSION_DIR}" \
+        -mindepth 1 -maxdepth 1 -print -quit)" ]; then
 
-    LOCAL_ARCHIVE="/tmp/dsh-session-backup-${RANDOM}-$$.tar.gz"
+        echo "[OHAMLAB] Restoring previous sessions..."
 
-    rm -f "${LOCAL_ARCHIVE}"
+        if tar -tzf "${BACKUP_FILE}" >/dev/null 2>&1; then
 
-    echo "[SESSION] Creating local archive..."
+            tar -xzf "${BACKUP_FILE}" \
+                -C "${LOCAL_SESSION_DIR}" \
+                --strip-components=1
 
-    if ! tar \
-        -czf "${LOCAL_ARCHIVE}" \
-        -C "${DSH_LOCAL_SESSIONS}" \
-        .
-    then
-
-        echo "[SESSION] WARNING: tar failed"
-
-        rm -f "${LOCAL_ARCHIVE}" || true
-
-        SESSION_BACKUP_RUNNING=0
-
-        return 0
-
-    fi
-
-
-    # ------------------------------------------------------
-    # Verify archive.
-    # ------------------------------------------------------
-
-    if ! tar \
-        -tzf "${LOCAL_ARCHIVE}" \
-        >/dev/null 2>&1
-    then
-
-        echo "[SESSION] WARNING: generated archive is invalid"
-
-        rm -f "${LOCAL_ARCHIVE}" || true
-
-        SESSION_BACKUP_RUNNING=0
-
-        return 0
-
-    fi
-
-
-    echo "[SESSION] Archive created:"
-    ls -lh "${LOCAL_ARCHIVE}" || true
-
-
-    # ------------------------------------------------------
-    # Copy archive to HF bucket.
-    #
-    # IMPORTANT:
-    #
-    # We do NOT use:
-    #
-    #   ln
-    #   cp -a
-    #   rsync -H
-    #
-    # because we don't want hard-link semantics.
-    #
-    # This is simply one regular file copied to /data.
-    # ------------------------------------------------------
-
-    BACKUP_NEW="${DSH_SESSION_BACKUP}.new"
-
-    rm -f "${BACKUP_NEW}" || true
-
-    echo "[SESSION] Uploading to HF bucket..."
-
-    if cp \
-        "${LOCAL_ARCHIVE}" \
-        "${BACKUP_NEW}"
-    then
-
-        # --------------------------------------------------
-        # Replace previous backup.
-        #
-        # If rename works on the HF mount, use it.
-        # --------------------------------------------------
-
-        if mv \
-            -f \
-            "${BACKUP_NEW}" \
-            "${DSH_SESSION_BACKUP}"
-        then
-
-            echo "[SESSION] Backup uploaded successfully"
+            echo "[OHAMLAB] Session restoration successful."
 
         else
 
-            echo "[SESSION] WARNING: could not replace backup"
-
-            rm -f "${BACKUP_NEW}" || true
-
-            rm -f "${LOCAL_ARCHIVE}" || true
-
-            SESSION_BACKUP_RUNNING=0
-
-            return 0
+            echo "[OHAMLAB] ERROR: Invalid session backup."
+            return 1
 
         fi
 
     else
 
-        echo "[SESSION] WARNING: upload to HF bucket failed"
-
-        rm -f "${BACKUP_NEW}" || true
-        rm -f "${LOCAL_ARCHIVE}" || true
-
-        SESSION_BACKUP_RUNNING=0
-
-        return 0
+        echo "[OHAMLAB] Existing local sessions detected."
+        echo "[OHAMLAB] Skipping restoration."
 
     fi
-
-
-    echo "[SESSION] Persistent backup:"
-    ls -lh "${DSH_SESSION_BACKUP}" || true
-
-
-    # ------------------------------------------------------
-    # Remove local temporary archive.
-    # ------------------------------------------------------
-
-    rm -f "${LOCAL_ARCHIVE}" || true
-
-
-    SESSION_BACKUP_RUNNING=0
-
 }
 
+# ============================================================
+# AUTOMATIC HOURLY BACKUP
+# ============================================================
 
-# ==========================================================
-# Background session backup
-# ==========================================================
+hourly_backup() {
 
-session_backup_loop() {
-
-    echo "[SESSION] Background backup loop started"
+    echo "[OHAMLAB] Hourly session backup enabled."
 
     while true; do
 
-        sleep "${DSH_SESSION_SYNC_INTERVAL}"
+        sleep "${BACKUP_INTERVAL}"
 
         backup_sessions || true
 
     done
-
 }
 
+# ============================================================
+# INSTALL OR REPAIR OHAMLAB HARNESS
+# ============================================================
+
+if [ ! -f "${INSTALL_MARKER}" ] || \
+   [ ! -f "${OHAMLAB_HARNESS_HOME}/app/package.json" ]; then
+
+    echo "[OHAMLAB] Installation missing or incomplete."
+    echo "[OHAMLAB] Running installation..."
+
+    ohamlab-harness install --force
+
+    if [ ! -f "${OHAMLAB_HARNESS_HOME}/app/package.json" ]; then
+
+        echo "[OHAMLAB] ERROR: Harness installation failed."
+        exit 1
+
+    fi
+
+    touch "${INSTALL_MARKER}"
+
+    echo "[OHAMLAB] Installation verified."
+
+else
+
+    echo "[OHAMLAB] Existing OhamLab installation detected."
+
+fi
 
 
 
-    
-
-# # ==========================================================
-# # Refresh provider list on startup
-# # ==========================================================
-
-# echo
-# echo "=========================================================="
-# echo "[PROVIDERS] Refreshing provider list"
-# echo "=========================================================="
-
-# if [ -x "./free-model-rahul" ]; then
-
-#     ./free-model-rahul --refresh --list || true
-
-#     echo "[PROVIDERS] Refresh completed"
-
-# else
-
-#     echo "[PROVIDERS] WARNING: ./free-model-rahul not found"
-
-# fi
-
-# echo
+restore_sessions
 
 
 
-
-echo
-echo "=========================================================="
-echo "[2/8] Fixing /data permissions"
-echo "=========================================================="
-
-chmod 755 /data 2>/dev/null || true
-
-chmod 700 "${DSH_HOME}" 2>/dev/null || true
-
-chmod 700 \
-    "${DSH_HOME}/profiles" \
-    "${DSH_HOME}/plugins" \
-    "${DSH_HOME}/workspaces" \
-    "${DSH_HOME}/cache" \
-    "${DSH_HOME}/logs" \
-    "${DSH_HOME}/tmp" \
-    "${DSH_SESSION_BACKUP_DIR}" \
-    "${DSH_LOCAL_SESSIONS}" \
-    2>/dev/null || true
-
-
+## TEST
 # ==========================================================
 # 2b. Optional plugins
 # ==========================================================
@@ -559,13 +246,31 @@ echo "=========================================================="
 
 export PROBE_DISABLED=1
 
-cd /app/deepseek-harness
 
+# Resolve the real Harness app before running any DSH plugin command.
+resolve_dsh_app_dir() {
+    local root
+    for root in \
+        "${OHAMLAB_HARNESS_HOME}/app" \
+        "${OHAMLAB_HARNESS_HOME}" \
+        /app/deepseek-harness \
+        /app/deepseek-harness/app; do
+        if [ -f "${root}/package.json" ] && [ -f "${root}/apps/cli/src/bin.ts" ]; then
+            printf '%s\n' "${root}"
+            return 0
+        fi
+    done
+    return 1
+}
 
-
-
-
+if ! DSH_APP_DIR="$(resolve_dsh_app_dir)"; then
+    echo '[OHAMLAB] ERROR: Cannot locate Harness source with apps/cli/src/bin.ts'
+    exit 1
+fi
+export DSH_APP_DIR
+echo "[OHAMLAB] Harness app directory: ${DSH_APP_DIR}"
 PROFILE_DIR="${DSH_HOME}/profiles/web"
+
 
 PLUGINS=(
     "@hytime/dsh-client-ui-shortcuts@0.1.12"
@@ -604,10 +309,10 @@ for PLUGIN in "${BAD_PLUGINS[@]}"; do
 
     echo "[PLUGIN] Disabling: ${PLUGIN}"
 
-    pnpm dsh plugin \
-        --profile web \
-        remove "${PLUGIN}" \
-        >/tmp/plugin-remove.log 2>&1 || true
+    (
+        cd "${DSH_APP_DIR}" &&
+        pnpm dsh plugin --profile web remove "${PLUGIN}"
+    ) >/tmp/plugin-remove.log 2>&1 || true
 
     rm -rf \
         "${PROFILE_DIR}/node_modules/${PLUGIN}" \
@@ -626,10 +331,10 @@ for PLUGIN in "${PLUGINS[@]}"; do
     echo
     echo "[PLUGIN] Installing: ${PLUGIN}"
 
-    if pnpm dsh plugin \
-        --profile web \
-        add "${PLUGIN}"
-    then
+    if (
+        cd "${DSH_APP_DIR}" &&
+        pnpm dsh plugin --profile web add "${PLUGIN}"
+    ); then
 
         echo "[PLUGIN] OK: ${PLUGIN}"
 
@@ -650,193 +355,335 @@ done
 echo
 echo "[PLUGIN] Approving optional build scripts..."
 
-pnpm approve-builds --all \
-    >/tmp/plugin-approve.log 2>&1 || true
+(
+    cd "${DSH_APP_DIR}" &&
+    pnpm approve-builds --all
+) >/tmp/plugin-approve.log 2>&1 || true
 
 
 
 
 
-# ----------------------------------------------------------
-# Install OhamLab Branding Plugin
-# ----------------------------------------------------------
+# Branding is installed below by install_ohamlab_web_plugins().
 
-echo
-echo "=========================================================="
-echo "[OHAMLAB] Installing branding plugin"
-echo "=========================================================="
 
-export DSH_HOME=/data/dsh
+## TEST
+# ============================================================
+# INSTALL / REPAIR OHAMLAB WEB BRANDING PLUGIN
+# ============================================================
+# Plugin sources live in vendor/ohamlab/plugins, not in the Harness
+# application root. Keep startup non-fatal if an optional plugin fails.
 
-OHAMLAB_BRAND_DIR="/app/ohamlab/plugins/harness-brand"
+# DSH_APP_DIR was resolved before optional plugin installation.
 
-echo "[OHAMLAB] Checking plugin directory..."
+resolve_ohamlab_plugin() {
+    local name="$1" root
+    for root in \
+        /app/ohamlab/plugins \
+        "${OHAMLAB_HARNESS_HOME}/vendor/ohamlab/plugins" \
+        "${OHAMLAB_HARNESS_HOME}/app/vendor/ohamlab/plugins" \
+        "${OHAMLAB_HARNESS_HOME}/plugins" \
+        /app/deepseek-harness/ohamlab/vendor/ohamlab/plugins \
+        /app/deepseek-harness/vendor/ohamlab/plugins; do
+        if [ -f "${root}/${name}/package.json" ]; then
+            printf '%s\n' "${root}/${name}"
+            return 0
+        fi
+    done
+    return 1
+}
 
-if [ ! -f "${OHAMLAB_BRAND_DIR}/package.json" ]; then
-    echo "[OHAMLAB] ERROR: package.json not found"
-    echo "[OHAMLAB] Expected: ${OHAMLAB_BRAND_DIR}/package.json"
+# The working Docker image takes branding from release 2.0. Do not silently
+# replace it with a different revision. Voice may be absent from that tag.
+fetch_ohamlab_plugin() {
+    local name="$1" ref="$2" repo="${OHAMLAB_REPO_URL:-https://github.com/innokria/ohamlab-deepseek-harness.git}"
+    local dest="/app/ohamlab/plugins/${name}" tmp
+    tmp="$(mktemp -d /tmp/ohamlab-plugin.XXXXXX)"
+    echo "[OHAMLAB] Fetching ${name} at ${ref}"
+    if ( cd "${tmp}" && git init -q && git remote add origin "${repo}" && \
+         git config core.sparseCheckout true && \
+         printf 'vendor/ohamlab/plugins/%s/\n' "${name}" > .git/info/sparse-checkout && \
+         git fetch -q --depth 1 origin "${ref}" && \
+         git checkout -q FETCH_HEAD && \
+         test -f "vendor/ohamlab/plugins/${name}/package.json" ); then
+        mkdir -p /app/ohamlab/plugins
+        cp -a "${tmp}/vendor/ohamlab/plugins/${name}" "${dest}"
+        rm -rf "${tmp}"
+        return 0
+    fi
+    rm -rf "${tmp}"
+    return 1
+}
 
-    echo "[OHAMLAB] Checking available plugin files:"
-    ls -la /app/ohamlab/plugins/ 2>/dev/null || true
+install_ohamlab_web_plugins() {
+    local plugin="harness-brand"
+    local source="" pkg="@ohamlab/harness-brand"
+    local profile="${DSH_HOME}/profiles/web"
+    local profile_package="${profile}/package.json"
 
-    exit 1
+    echo "[OHAMLAB] Installing optional OhamLab branding plugin (best-effort)..."
+
+    if ! command -v pnpm >/dev/null 2>&1; then
+        echo "[OHAMLAB] WARNING: pnpm unavailable; skipping branding plugin"
+        return 0
+    fi
+
+    if ! mkdir -p "${profile}"; then
+        echo "[OHAMLAB] WARNING: cannot create web profile; skipping branding plugin"
+        return 0
+    fi
+
+    # harness-voice is deliberately disabled. Its client bundle currently
+    # loads without registering @ohamlab/harness-voice in __ModuleLoader__,
+    # which causes a client-modules loader failure and can break the UI.
+    echo "[OHAMLAB] Disabling known-broken optional plugin: @ohamlab/harness-voice"
+    if [ -f "${profile_package}" ]; then
+        if ! PROFILE_PACKAGE="${profile_package}" node <<'NODE'
+const fs = require('fs');
+const file = process.env.PROFILE_PACKAGE;
+try {
+  const p = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const name = '@ohamlab/harness-voice';
+  if (p.dependencies) delete p.dependencies[name];
+  if (p.optionalDependencies) delete p.optionalDependencies[name];
+  if (p.devDependencies) delete p.devDependencies[name];
+  if (p.dsh?.profile && Array.isArray(p.dsh.profile.bundles)) {
+    p.dsh.profile.bundles = p.dsh.profile.bundles.filter(x => x !== name);
+  }
+  fs.writeFileSync(file, JSON.stringify(p, null, 2) + '\n');
+} catch (e) {
+  console.error('[OHAMLAB] WARNING: could not remove voice from profile metadata:', e.message);
+  process.exitCode = 1;
+}
+NODE
+        then
+            echo "[OHAMLAB] WARNING: voice metadata cleanup failed; continuing startup"
+        fi
+    else
+        echo "[OHAMLAB] WARNING: profile package.json missing; cannot clean voice dependency"
+    fi
+
+    # Remove any stale installed link so the runtime cannot discover the
+    # broken client bundle from a previous deployment.
+    if ! rm -rf "${profile}/node_modules/@ohamlab/harness-voice"; then
+        echo "[OHAMLAB] WARNING: could not remove stale voice module; continuing"
+    fi
+
+    if ! source="$(resolve_ohamlab_plugin "${plugin}")"; then
+        if fetch_ohamlab_plugin "${plugin}" "${OHAMLAB_BRAND_REF:-2.0}"; then
+            source="/app/ohamlab/plugins/${plugin}"
+        else
+            echo "[OHAMLAB] WARNING: ${pkg} source unavailable; continuing without branding"
+            return 0
+        fi
+    fi
+
+    echo "[OHAMLAB] ${pkg} source: ${source}"
+
+    if [ ! -s "${source}/package.json" ]; then
+        echo "[OHAMLAB] WARNING: ${pkg} package.json missing; skipping"
+        return 0
+    fi
+
+    if ! PLUGIN_PACKAGE="${source}/package.json" node -e '
+      const fs=require("fs");
+      const p=JSON.parse(fs.readFileSync(process.env.PLUGIN_PACKAGE,"utf8"));
+      console.log(JSON.stringify({name:p.name,version:p.version,dsh:p.dsh,exports:p.exports},null,2));
+    '; then
+        echo "[OHAMLAB] WARNING: ${pkg} metadata invalid; skipping"
+        return 0
+    fi
+
+    if [ ! -s "${source}/lib/client.js" ]; then
+        echo "[OHAMLAB] Building ${pkg} client artifact"
+        if ! ( cd "${source}" && pnpm install --no-frozen-lockfile && pnpm run build ); then
+            echo "[OHAMLAB] WARNING: ${pkg} build failed; continuing without branding"
+            return 0
+        fi
+    fi
+
+    if [ ! -s "${source}/lib/client.js" ]; then
+        echo "[OHAMLAB] WARNING: ${pkg} lib/client.js missing; skipping"
+        return 0
+    fi
+
+    if ! ( cd "${DSH_APP_DIR}" && pnpm dsh plugin --profile web add "${source}" ); then
+        echo "[OHAMLAB] WARNING: failed to register ${pkg}; continuing startup"
+        return 0
+    fi
+
+    if ! ( cd "${DSH_APP_DIR}" && pnpm dsh plugin --profile web install ); then
+        echo "[OHAMLAB] WARNING: profile plugin install failed; continuing with existing installation"
+    fi
+
+    if [ ! -f "${profile_package}" ]; then
+        echo "[OHAMLAB] WARNING: ${profile_package} missing; skipping bundle activation"
+        return 0
+    fi
+
+    if ! PROFILE_PACKAGE="${profile_package}" node <<'NODE'
+const fs = require('fs');
+const file = process.env.PROFILE_PACKAGE;
+try {
+  const p = JSON.parse(fs.readFileSync(file, 'utf8'));
+  p.dsh ??= {};
+  p.dsh.profile ??= {};
+  p.dsh.profile.bundles ??= [];
+  const brand = '@ohamlab/harness-brand';
+  const voice = '@ohamlab/harness-voice';
+  p.dsh.profile.bundles = p.dsh.profile.bundles.filter(x => x !== voice);
+  if (p.dependencies) delete p.dependencies[voice];
+  if (p.dependencies?.[brand] && !p.dsh.profile.bundles.includes(brand)) {
+    p.dsh.profile.bundles.push(brand);
+  }
+  fs.writeFileSync(file, JSON.stringify(p, null, 2) + '\n');
+  console.log('[OHAMLAB] Active OhamLab bundles:', p.dsh.profile.bundles.filter(x => x.startsWith('@ohamlab/')));
+} catch (e) {
+  console.error('[OHAMLAB] WARNING: bundle metadata update failed:', e.message);
+  process.exitCode = 1;
+}
+NODE
+    then
+        echo "[OHAMLAB] WARNING: could not update branding bundle metadata; continuing"
+    fi
+
+    if ! ( cd "${profile}" && pnpm install --no-frozen-lockfile ); then
+        echo "[OHAMLAB] WARNING: profile dependency install failed; continuing with existing node_modules"
+    fi
+
+    if ! ( cd "${DSH_APP_DIR}" && pnpm dsh plugin --profile web list ); then
+        echo "[OHAMLAB] WARNING: plugin list command failed; continuing"
+    fi
+
+    echo "[OHAMLAB] Optional branding setup finished."
+    return 0
+}
+
+# Optional plugin setup must never abort Harness startup.
+if ! install_ohamlab_web_plugins; then
+    echo "[OHAMLAB] WARNING: branding setup failed unexpectedly; continuing startup"
 fi
 
-cd /app/deepseek-harness
+# ============================================================
+# REPAIR OPTIONAL SHORTCUTS PLUGIN BEFORE HARNESS BOOT
+# ============================================================
+# A profile dependency can be present even when its exported entrypoint
+# is absent. In that case the DSH server crashes during module loading.
+repair_shortcuts_plugin() {
+    local profile="${DSH_HOME}/profiles/web"
+    local module="${profile}/node_modules/@hytime/dsh-client-ui-shortcuts"
+    local entry="${module}/lib/index.js"
+    local pkg="${profile}/package.json"
+    echo "[OHAMLAB] Checking shortcuts runtime entry: ${entry}"
+    if [ -s "${entry}" ]; then
+        echo '[OHAMLAB] PASS: shortcuts runtime entry exists'
+        return 0
+    fi
+    echo '[OHAMLAB] Shortcuts entry missing; attempting clean package reinstall'
+    if ( cd "${profile}" && pnpm add '@hytime/dsh-client-ui-shortcuts@0.1.12' --force --no-frozen-lockfile ); then
+        if [ -s "${entry}" ]; then
+            echo '[OHAMLAB] PASS: shortcuts runtime entry repaired'
+            return 0
+        fi
+    fi
+    # This is an optional UI plugin. Disable only this broken package,
+    # preserving brand/voice and all other profile configuration.
+    echo '[OHAMLAB] WARNING: shortcuts remains broken; disabling it to prevent DSH crash'
+    cp -f "${pkg}" "${pkg}.before-shortcuts-repair" || true
+    PROFILE_PACKAGE="${pkg}" node <<'NODE'
+const fs = require('fs');
+const file = process.env.PROFILE_PACKAGE;
+const p = JSON.parse(fs.readFileSync(file, 'utf8'));
+const name = '@hytime/dsh-client-ui-shortcuts';
+if (p.dependencies) delete p.dependencies[name];
+if (Array.isArray(p.dsh?.profile?.bundles)) {
+  p.dsh.profile.bundles = p.dsh.profile.bundles.filter(x => x !== name);
+}
+fs.writeFileSync(file, JSON.stringify(p, null, 2) + '\n');
+NODE
+    ( cd "${profile}" && pnpm install --no-frozen-lockfile ) || {
+        echo '[OHAMLAB] ERROR: profile install failed after disabling broken shortcuts'
+        return 1
+    }
+    echo '[OHAMLAB] Shortcuts disabled; continuing with remaining configured plugins'
+}
+if ! repair_shortcuts_plugin; then
+    echo '[OHAMLAB] WARNING: shortcuts repair failed; continuing startup'
+fi
 
-if pnpm dsh plugin \
-    --profile web \
-    add "${OHAMLAB_BRAND_DIR}"
-then
-    echo "[OHAMLAB] Branding plugin installed successfully"
-else
-    echo "[OHAMLAB] ERROR: Branding installation failed"
-    exit 1
+# Persist repaired profile metadata for the next Space restart. Avoid copying
+# node_modules back to the bucket (large and full of symlinks).
+if [ -f "${DSH_HOME}/profiles/web/package.json" ]; then
+    mkdir -p "${OHAMLAB_PERSISTENT_DSH_HOME}/profiles/web"
+    for f in package.json cordis.yml cordis.patch.yml pnpm-lock.yaml pnpm-workspace.yaml; do
+        if [ -f "${DSH_HOME}/profiles/web/${f}" ]; then
+            cp -f "${DSH_HOME}/profiles/web/${f}" "${OHAMLAB_PERSISTENT_DSH_HOME}/profiles/web/${f}" || true
+        fi
+    done
 fi
 
 
-
-
-# # ----------------------------------------------------------
-# # OhamLab Search + Agent Lab eXCLUSIVE LOCAL 
-# # ----------------------------------------------------------
-# python -m pip install --break-system-packages \
-#     ohamlab-agent \
-#     ohamlab-agent-lab
-
-# # Search verification
-# which ohamlab
-# ohamlab search "FastAPI documentation" --max-results 5
-
-# # Agent Lab verification
-# python -m pip show ohamlab-agent-lab
-
-# # ----------------------------------------------------------
-# # OhamLab Search + Agent Lab
-# # ----------------------------------------------------------
-
-# echo
-# echo "[OHAMLAB] Installing OhamLab packages..."
-
-# if python -m pip install --break-system-packages \
-#     ohamlab-agent \
-#     ohamlab-agent-lab
-# then
-#     echo "[OHAMLAB] Packages installed successfully"
-# else
-#     echo "[OHAMLAB] WARNING: Package installation failed"
-# fi
-
-# # ----------------------------------------------------------
-# # Verify OhamLab Search
-# # ----------------------------------------------------------
-
-# echo
-# echo "[OHAMLAB] Verifying Search..."
-
-# if command -v ohamlab >/dev/null 2>&1; then
-#     echo "[OHAMLAB] Search CLI: $(command -v ohamlab)"
-# else
-#     echo "[OHAMLAB] WARNING: Search CLI unavailable"
-# fi
-
-# # ----------------------------------------------------------
-# # Verify OhamLab Agent Lab
-# # ----------------------------------------------------------
-
-# echo
-# echo "[OHAMLAB] Verifying Agent Lab..."
-
-# if python -m pip show ohamlab-agent-lab >/dev/null 2>&1; then
-#     echo "[OHAMLAB] Agent Lab package installed"
-# else
-#     echo "[OHAMLAB] WARNING: Agent Lab package unavailable"
-# fi
-
-
-
-
-
-
-
-# ----------------------------------------------------------
-# Install OhamLab Skills
-# ----------------------------------------------------------
-
-
-# ----------------------------------------------------------
-# Install OhamLab Skills
-# ----------------------------------------------------------
-
-
-# ----------------------------------------------------------
-# Install OhamLab Skills
-# ----------------------------------------------------------
-
-
-# ------------------------------------------------------------
-# OHAMLAB — Verify Python runtime and integrations
-# ------------------------------------------------------------
-
-echo
-echo "[OHAMLAB] Checking Python runtime..."
-
-OHAM_PYTHON="/opt/ohamlab-venv/bin/python"
-OHAMLAB_ROOT="/app/deepseek-harness/ohamlab/vendor/ohamlab"
-
-export PATH="/opt/ohamlab-venv/bin:${PATH}"
-
-if [ ! -x "${OHAM_PYTHON}" ]; then
-    echo "[OHAMLAB] ERROR: Python environment missing!"
-    exit 1
-fi
-
-"${OHAM_PYTHON}" --version
-
-if ! "${OHAM_PYTHON}" -m pip show ohamlab-agent >/dev/null 2>&1; then
-    echo "[OHAMLAB] ERROR: Search package missing!"
-    exit 1
-fi
-
-if ! "${OHAM_PYTHON}" -m pip show ohamlab-agent-lab >/dev/null 2>&1; then
-    echo "[OHAMLAB] ERROR: Agent Lab package missing!"
-    exit 1
-fi
-
-if ! command -v ohamlab >/dev/null 2>&1; then
-    echo "[OHAMLAB] ERROR: Search CLI missing!"
-    exit 1
-fi
-
-echo "[OHAMLAB] PASS: Python runtime ready"
-echo "[OHAMLAB] PASS: OhamLab Search installed"
-echo "[OHAMLAB] PASS: Agent Lab installed"
-echo
 
 
 # ============================================================
-# OHAMLAB — Gateway, Local Integrations & Skills
+# OHAMLAB BRANDING - CORDIS PATCH
 # ============================================================
 
-echo
-echo "============================================================"
-echo "[OHAMLAB] Initialising OhamLab integrations..."
-echo "============================================================"
+# ============================================================
+# OHAMLAB BRANDING - CORDIS PATCH INVESTIGATION
+# ============================================================
 
+echo "=========================================================="
+echo "[OHAMLAB] Investigating Cordis insertion syntax"
+echo "=========================================================="
+
+PROFILE="${DSH_HOME}/profiles/web"
+APP="${DSH_APP_DIR:-/app/ohamlab-harness/app}"
+PATCH="${PROFILE}/cordis.patch.yml"
+
+# Remove only the invalid patch we previously generated.
+if [ -f "${PATCH}" ] &&
+   grep -q 'id: ui-brand-ohamlab' "${PATCH}" &&
+   ! grep -q 'insert:' "${PATCH}"; then
+
+    cp "${PATCH}" "${PATCH}.invalid-brand-backup"
+
+    cat > "${PATCH}" <<'YAML'
+[]
+YAML
+
+    echo "[OHAMLAB] Removed invalid branding patch."
+fi
+
+echo "[OHAMLAB] Searching installed DSH source for patch syntax..."
+
+grep -RInE \
+  --include='*.ts' \
+  --include='*.yml' \
+  --include='*.yaml' \
+  --exclude-dir=node_modules \
+  'insert:|before:|after:|patch: entry|insertBefore|insertAfter' \
+  "${APP}/apps" \
+  "${APP}/packages" \
+  2>/dev/null | head -100 || true
+
+echo "[OHAMLAB] Current patch:"
+cat "${PATCH}"
+
+echo "=========================================================="
+
+echo "=========================================================="
 # ------------------------------------------------------------
-# 1. Configuration
+# 4. Verify local Search and Agent Lab packages
 # ------------------------------------------------------------
-
-OHAMLAB_ROOT="/app/deepseek-harness/ohamlab/vendor/ohamlab"
-OHAM_SKILLS_SOURCE="${OHAMLAB_ROOT}/skills"
-OHAM_SKILLS_TARGET="/data/dsh/skills"
-OHAM_REQUIREMENTS="${OHAMLAB_ROOT}/gateway/requirements.txt"
-
-# Python interpreter used by the MCP gateway
-
 # ------------------------------------------------------------
 # Detect Python interpreter
 # ------------------------------------------------------------
+
+echo "[OHAMLAB] Starting Harness..."
+
+
+
 
 echo "[OHAMLAB] Detecting Python..."
 
@@ -857,318 +704,301 @@ fi
 echo "[OHAMLAB] PASS: Python found at ${OHAM_PYTHON}"
 
 "${OHAM_PYTHON}" --version
-
-# Verify pip is available
-if ! "${OHAM_PYTHON}" -m pip --version; then
-    echo "[OHAMLAB] ERROR: pip is not installed for ${OHAM_PYTHON}"
-    exit 1
-fi
-
-
-echo "[OHAMLAB] Root: ${OHAMLAB_ROOT}"
-echo "[OHAMLAB] Python: ${OHAM_PYTHON}"
-echo "[OHAMLAB] Skills source: ${OHAM_SKILLS_SOURCE}"
-echo "[OHAMLAB] Skills target: ${OHAM_SKILLS_TARGET}"
-
-# ------------------------------------------------------------
-# 2. Verify OhamLab directories
-# ------------------------------------------------------------
-
-if [ ! -d "${OHAMLAB_ROOT}" ]; then
-    echo "[OHAMLAB] ERROR: OhamLab directory not found!"
-    echo "[OHAMLAB] Checking available directories..."
-
-    ls -la /app/deepseek-harness/ohamlab/ 2>/dev/null || true
-    ls -la /app/deepseek-harness/vendor/ 2>/dev/null || true
-    ls -la /app/ohamlab/ 2>/dev/null || true
-
-    exit 1
-fi
-
-if [ ! -d "${OHAM_SKILLS_SOURCE}" ]; then
-    echo "[OHAMLAB] ERROR: Skills directory not found!"
-    exit 1
-fi
-
-if [ ! -f "${OHAM_REQUIREMENTS}" ]; then
-    echo "[OHAMLAB] ERROR: Gateway requirements.txt not found!"
-    exit 1
-fi
-
-# ------------------------------------------------------------
-# 3. Install OhamLab gateway dependencies
-# ------------------------------------------------------------
-
 echo
-echo "[OHAMLAB] Installing gateway dependencies..."
+echo "[OHAMLAB] Verifying local Search and Agent Lab..."
 
-if ! "${OHAM_PYTHON}" -m pip install \
-    -r "${OHAM_REQUIREMENTS}"; then
-
-    echo "[OHAMLAB] ERROR: Gateway dependency installation failed!"
+if [ ! -x "${OHAM_PYTHON}" ]; then
+    echo "[OHAMLAB] ERROR: Python environment not found: ${OHAM_PYTHON}"
     exit 1
 fi
 
-echo "[OHAMLAB] PASS: Gateway dependencies installed"
-
-# ------------------------------------------------------------
-# 4. Install local Search and Agent Lab packages
-# ------------------------------------------------------------
-
-echo
-echo "[OHAMLAB] Installing local Search and Agent Lab..."
-
-if ! "${OHAM_PYTHON}" -m pip install \
-    "ohamlab-agent==0.1.2" \
-    "ohamlab-agent-lab==7.0.0"; then
-
-    echo "[OHAMLAB] ERROR: Local package installation failed!"
-    exit 1
-fi
-
-echo "[OHAMLAB] PASS: Local packages installed"
-
-# ------------------------------------------------------------
-# 5. Verify local packages and CLI
-# ------------------------------------------------------------
-
-echo
-echo "[OHAMLAB] Verifying local installations..."
-
-if ! "${OHAM_PYTHON}" -m pip show ohamlab-agent >/dev/null 2>&1; then
+"${OHAM_PYTHON}" -m pip show ohamlab-agent >/dev/null 2>&1 || {
     echo "[OHAMLAB] ERROR: ohamlab-agent not installed!"
     exit 1
-fi
+}
 
-if ! "${OHAM_PYTHON}" -m pip show ohamlab-agent-lab >/dev/null 2>&1; then
+"${OHAM_PYTHON}" -m pip show ohamlab-agent-lab >/dev/null 2>&1 || {
     echo "[OHAMLAB] ERROR: ohamlab-agent-lab not installed!"
     exit 1
-fi
+}
 
-if ! command -v ohamlab >/dev/null 2>&1; then
-    echo "[OHAMLAB] ERROR: OhamLab Search CLI not found on PATH!"
-    exit 1
-fi
-
-echo "[OHAMLAB] PASS: Search CLI available"
+echo "[OHAMLAB] PASS: Search package installed"
 echo "[OHAMLAB] PASS: Agent Lab package installed"
 
 # ------------------------------------------------------------
-# 6. Install OhamLab skills
+# 5. Inspect Agent Lab Python entry points
 # ------------------------------------------------------------
 
 echo
-echo "[OHAMLAB] Installing OhamLab skills..."
+echo "[OHAMLAB] Inspecting Agent Lab installation..."
 
-mkdir -p "${OHAM_SKILLS_TARGET}"
+"${OHAM_PYTHON}" - <<'PY'
+from importlib.metadata import distribution
 
-for SKILL in web-search agent-lab research-workflow; do
+dist = distribution("ohamlab-agent-lab")
 
-    SOURCE="${OHAM_SKILLS_SOURCE}/${SKILL}"
-    TARGET="${OHAM_SKILLS_TARGET}/${SKILL}"
+print("[OHAMLAB] Agent Lab version:", dist.version)
 
-    if [ ! -f "${SOURCE}/SKILL.md" ]; then
-        echo "[OHAMLAB] ERROR: Missing ${SOURCE}/SKILL.md"
-        exit 1
-    fi
+top_level = dist.read_text("top_level.txt")
 
-    mkdir -p "${TARGET}"
+print("[OHAMLAB] Python modules:")
+print(top_level or "No top_level.txt available")
 
-    # Copy the complete skill directory, including supporting files
-    if ! cp -a "${SOURCE}/." "${TARGET}/"; then
-        echo "[OHAMLAB] ERROR: Failed to install ${SKILL}"
-        exit 1
-    fi
+print("[OHAMLAB] Registered executable entry points:")
 
-    echo "[OHAMLAB] PASS: ${SKILL} installed"
+for entry in dist.entry_points:
+    if entry.group == "console_scripts":
+        print(f"  {entry.name} = {entry.value}")
 
-done
+print("[OHAMLAB] Agent Lab package inspection complete.")
+PY
 
 # ------------------------------------------------------------
-# 7. Verify installed skills
+# 6. Verify Python dependencies
 # ------------------------------------------------------------
 
 echo
-echo "[OHAMLAB] Installed skills:"
+echo "[OHAMLAB] Checking Python dependencies..."
 
-find "${OHAM_SKILLS_TARGET}" -name SKILL.md -print
-
-for SKILL in web-search agent-lab research-workflow; do
-
-    if [ ! -f "${OHAM_SKILLS_TARGET}/${SKILL}/SKILL.md" ]; then
-        echo "[OHAMLAB] ERROR: ${SKILL} verification failed!"
-        exit 1
-    fi
-
-done
-
-echo "[OHAMLAB] PASS: All OhamLab skills verified"
-
-# ------------------------------------------------------------
-# 8. Verify local adapters and gateway
-# ------------------------------------------------------------
-
-echo
-echo "[OHAMLAB] Checking MCP integration files..."
-
-for FILE in \
-    "${OHAMLAB_ROOT}/adapters/local_search_adapter.py" \
-    "${OHAMLAB_ROOT}/adapters/local_agent_lab_adapter.py" \
-    "${OHAMLAB_ROOT}/gateway/server.py"; do
-
-    if [ ! -f "${FILE}" ]; then
-        echo "[OHAMLAB] ERROR: Missing ${FILE}"
-        exit 1
-    fi
-
-    echo "[OHAMLAB] PASS: $(basename "${FILE}")"
-
-done
-
-# ------------------------------------------------------------
-# 9. Compile Python integration files
-# ------------------------------------------------------------
-
-echo
-echo "[OHAMLAB] Validating Python integration files..."
-
-if ! "${OHAM_PYTHON}" -m py_compile \
-    "${OHAMLAB_ROOT}/adapters/local_search_adapter.py" \
-    "${OHAMLAB_ROOT}/adapters/local_agent_lab_adapter.py" \
-    "${OHAMLAB_ROOT}/gateway/server.py"; then
-
-    echo "[OHAMLAB] ERROR: Python validation failed!"
-    exit 1
+if "${OHAM_PYTHON}" -m pip check; then
+    echo "[OHAMLAB] PASS: Python dependencies verified"
+else
+    echo "[OHAMLAB] WARNING: Python dependency check reported issues; continuing startup"
 fi
 
-echo "[OHAMLAB] PASS: Python syntax validation successful"
-
 # ------------------------------------------------------------
-# 10. Complete
+# 7. Verify OhamLab CLI
 # ------------------------------------------------------------
 
-echo
-echo "============================================================"
-echo "[OHAMLAB] Installation complete!"
-echo "============================================================"
-echo "[OHAMLAB] Search:        Installed"
-echo "[OHAMLAB] Agent Lab:     Installed"
-echo "[OHAMLAB] MCP Gateway:   Files verified"
-echo "[OHAMLAB] Skills:        3 installed"
-echo "[OHAMLAB] Skills path:   ${OHAM_SKILLS_TARGET}"
-echo "============================================================"
-echo
+if command -v ohamlab >/dev/null 2>&1; then
+    echo "[OHAMLAB] PASS: OhamLab CLI available"
+    command -v ohamlab
+else
+    echo "[OHAMLAB] WARNING: OhamLab CLI unavailable"
+fi
 
 
 
+# ============================================================
+# OHAMLAB BRANDING DIAGNOSTICS
+# Runs automatically before Harness starts
+# Read-only: does not change plugin configuration
+# ============================================================
+
+diagnose_ohamlab_branding() (
+    set +e
+    set +u
+    set +o pipefail
+
+    echo
+    echo "=========================================================="
+    echo "[BRAND DEBUG] STARTING OHAMLAB BRANDING DIAGNOSTICS"
+    echo "=========================================================="
+
+    BRAND_DIR="/app/ohamlab/plugins/harness-brand"
+    PROFILE_DIR="${DSH_HOME:-/data/dsh}/profiles/web"
+    APP_DIR="${DSH_APP_DIR:-/app/ohamlab-harness/app}"
+
+    echo
+    echo "[BRAND DEBUG] 1. IMPORTANT PATHS"
+    echo "DSH_HOME=${DSH_HOME:-unset}"
+    echo "OHAMLAB_HARNESS_HOME=${OHAMLAB_HARNESS_HOME:-unset}"
+    echo "DSH_APP_DIR=${APP_DIR}"
+    echo "BRAND_DIR=${BRAND_DIR}"
+    echo "PROFILE_DIR=${PROFILE_DIR}"
+
+    echo
+    echo "[BRAND DEBUG] 2. BRAND SOURCE"
+
+    if [ -f "${BRAND_DIR}/package.json" ]; then
+        echo "[BRAND DEBUG] PASS: Branding package exists"
+        ls -la "${BRAND_DIR}"
+    else
+        echo "[BRAND DEBUG] FAIL: Branding source missing"
+    fi
+
+    echo
+    echo "[BRAND DEBUG] 3. BRAND PACKAGE METADATA"
+
+    if [ -f "${BRAND_DIR}/package.json" ]; then
+        BRAND_PACKAGE="${BRAND_DIR}/package.json" node <<'NODE'
+const fs = require("fs");
+const p = JSON.parse(fs.readFileSync(process.env.BRAND_PACKAGE, "utf8"));
+
+console.log(JSON.stringify({
+    name: p.name,
+    version: p.version,
+    type: p.type,
+    main: p.main,
+    exports: p.exports,
+    dsh: p.dsh,
+    scripts: p.scripts
+}, null, 2));
+NODE
+    fi
+
+    echo
+    echo "[BRAND DEBUG] 4. COMPILED BRAND ARTIFACTS"
+
+    for file in \
+        "${BRAND_DIR}/lib/index.js" \
+        "${BRAND_DIR}/lib/client.js"; do
+
+        if [ -s "${file}" ]; then
+            echo "[BRAND DEBUG] PASS: ${file}"
+            ls -lh "${file}"
+        else
+            echo "[BRAND DEBUG] FAIL: Missing or empty ${file}"
+        fi
+    done
+
+    echo
+    echo "[BRAND DEBUG] 5. PROFILE PACKAGE"
+
+    if [ -f "${PROFILE_DIR}/package.json" ]; then
+        PROFILE_PACKAGE="${PROFILE_DIR}/package.json" node <<'NODE'
+const fs = require("fs");
+const p = JSON.parse(fs.readFileSync(process.env.PROFILE_PACKAGE, "utf8"));
+
+console.log("Profile name:", p.name);
+console.log("Dependencies:", JSON.stringify(p.dependencies, null, 2));
+console.log("Bundles:", JSON.stringify(p.dsh?.profile?.bundles, null, 2));
+
+for (const name of ["@ohamlab/harness-brand"]) {
+    console.log(name, {
+        installed: Boolean(p.dependencies?.[name]),
+        bundle: Boolean(p.dsh?.profile?.bundles?.includes(name))
+    });
+}
+NODE
+    else
+        echo "[BRAND DEBUG] FAIL: Web profile package.json missing"
+    fi
+
+    echo
+    echo "[BRAND DEBUG] 6. PROFILE SYMLINKS"
+
+    for plugin in harness-brand; do
+        target="${PROFILE_DIR}/node_modules/@ohamlab/${plugin}"
+
+        if [ -e "${target}/package.json" ]; then
+            echo "[BRAND DEBUG] PASS: ${plugin} resolves"
+            readlink -f "${target}"
+        else
+            echo "[BRAND DEBUG] FAIL: ${plugin} does not resolve"
+            ls -ld "${target}" 2>&1
+        fi
+    done
+
+    echo
+    echo "[BRAND DEBUG] 7. CORDIS CONFIGURATION"
+
+    for file in \
+        "${PROFILE_DIR}/cordis.yml" \
+        "${PROFILE_DIR}/cordis.patch.yml"; do
+
+        echo "[BRAND DEBUG] File: ${file}"
+
+        if [ -f "${file}" ]; then
+            cat "${file}"
+        else
+            echo "[BRAND DEBUG] Missing"
+        fi
+    done
+
+    echo
+    echo "[BRAND DEBUG] 8. CLIENT IMPLEMENTATION FILES"
+
+    if [ -d "${BRAND_DIR}" ]; then
+        find "${BRAND_DIR}" \
+            -maxdepth 4 \
+            -type f \
+            ! -path '*/node_modules/*' \
+            ! -name '*.map' \
+            | sort | head -100
+    fi
+
+    echo
+    echo "[BRAND DEBUG] 9. CLIENT REGISTRATION REFERENCES"
+
+    if [ -d "${BRAND_DIR}" ]; then
+        grep -RInE \
+            --exclude-dir=node_modules \
+            --exclude='*.map' \
+            --exclude='*.min.js' \
+            'register|inject|mount|onMounted|createRoot|document\.|window\.|logo|branding|fish|client' \
+            "${BRAND_DIR}/src" \
+            "${BRAND_DIR}/lib/client.js" \
+            2>/dev/null | cut -c 1-350 | head -100
+    fi
+
+    echo
+    echo "[BRAND DEBUG] 10. DSH CLI PLUGIN LIST"
+
+    if [ -f "${APP_DIR}/apps/cli/src/bin.ts" ]; then
+        (
+            cd "${APP_DIR}" || exit 1
+            pnpm dsh plugin --profile web list
+        ) 2>&1
+    else
+        echo "[BRAND DEBUG] FAIL: DSH CLI not found at ${APP_DIR}"
+    fi
+
+    echo
+    echo "[BRAND DEBUG] 11. DSH EFFECTIVE CONFIGURATION"
+
+    if [ -f "${APP_DIR}/apps/cli/src/bin.ts" ]; then
+        (
+            cd "${APP_DIR}" || exit 1
+            timeout 30s pnpm dsh --profile web --dump-config
+        ) 2>&1 | grep -iE \
+            -C 5 'ohamlab|harness-brand|error|plugin' \
+            | head -120
+    fi
+
+    echo
+    echo "[BRAND DEBUG] 12. ALTERNATE PROFILE LOCATION"
+
+    if [ -d "${DSH_HOME:-/data/dsh}/web/profile" ]; then
+        echo "[BRAND DEBUG] Alternate profile exists:"
+        ls -la "${DSH_HOME:-/data/dsh}/web/profile" | head -30
+    else
+        echo "[BRAND DEBUG] No alternate web/profile directory"
+    fi
+
+    echo
+    echo "[BRAND DEBUG] 13. BRAND CLIENT CONTENT CHECK"
+
+    if [ -s "${BRAND_DIR}/lib/client.js" ]; then
+        echo "[BRAND DEBUG] Client file size:"
+        wc -c "${BRAND_DIR}/lib/client.js"
+
+        echo "[BRAND DEBUG] Client imports:"
+        grep -oE \
+            '(from |import\()["\x27][^"\x27]+' \
+            "${BRAND_DIR}/lib/client.js" \
+            | head -30
+    fi
+
+    echo
+    echo "=========================================================="
+    echo "[BRAND DEBUG] DIAGNOSTICS FINISHED"
+    echo "=========================================================="
+    echo
+)
+
+echo "[OHAMLAB] Running branding diagnostics before launch..."
+diagnose_ohamlab_branding || \
+    echo "[OHAMLAB] WARNING: Branding diagnostics encountered an error"
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-# # ----------------------------------------------------------
-# # Get planning-with-files skill
-# # ----------------------------------------------------------
-
-# echo
-# echo "[SKILL] Preparing planning-with-files..."
-
-# PLANNING_SKILL_DIR="/data/dsh/skills/planning-with-files"
-
-# if [ -d "${PLANNING_SKILL_DIR}" ]; then
-
-#     echo "[SKILL] planning-with-files already exists"
-
-# else
-
-#     echo "[SKILL] Cloning planning-with-files..."
-
-#     mkdir -p /data/dsh/skills
-
-#     if git clone \
-#         https://github.com/OthmanAdi/planning-with-files.git \
-#         "${PLANNING_SKILL_DIR}" \
-#         >/tmp/planning-with-files-clone.log 2>&1
-#     then
-
-#         echo "[SKILL] OK: planning-with-files cloned"
-
-#     else
-
-#         echo "[SKILL] WARNING: failed to clone planning-with-files"
-#         tail -20 /tmp/planning-with-files-clone.log 2>/dev/null || true
-
-#     fi
-
-# fi
-
-
-# ----------------------------------------------------------
-# Verify planning-with-files skill
-# ----------------------------------------------------------
-
-# echo
-# echo "[SKILL] Verifying planning-with-files..."
-
-# if [ -f "${PLANNING_SKILL_DIR}/SKILL.md" ]; then
-
-#     echo "[SKILL] OK: planning-with-files ready"
-#     echo "[SKILL] Location: ${PLANNING_SKILL_DIR}"
-
-# else
-
-#     echo "[SKILL] WARNING: SKILL.md not found"
-#     echo "[SKILL] Expected: ${PLANNING_SKILL_DIR}/SKILL.md"
-
-# fi
-
-# # ----------------------------------------------------------
-# # planning-with-files configuration
-# # ----------------------------------------------------------
-
-# echo
-# echo "[PWF] Configuring planning-with-files..."
-
-# export PWF_PLAN_ROOT="/data/dsh/planning-with-files/projects"
-
-# mkdir -p "${PWF_PLAN_ROOT}"
-
-# echo "[PWF] Plan root: ${PWF_PLAN_ROOT}"
-
-
-
-# ==========================================================
-# Refresh free LLM providers
-# ==========================================================
-# ==========================================================
-# Refresh free LLM providers
-# ==========================================================
-
-
-
-
-
-
-
+    
 echo
 echo "=========================================================="
 echo "[DSH] Installed web plugins"
 echo "=========================================================="
 
-pnpm dsh plugin \
-    --profile web \
-    list \
-    2>&1 || true
+( cd "${DSH_APP_DIR}" && pnpm dsh plugin --profile web list ) 2>&1 || true
 
 # ==========================================================
 # 3. Configure DSH providers
@@ -1396,460 +1226,109 @@ echo "[DSH] Settings file: ${SETTINGS_FILE}"
 echo "[DSH] Provider pool configured"
 echo "[DSH] Default model: groq / openai/gpt-oss-120b"
 
-
-# ==========================================================
-# 4. Credential security + availability
-# ==========================================================
-
-echo
-echo "=========================================================="
-echo "[4/8] Securing credentials + checking providers"
-echo "=========================================================="
-
-if [ -f "${DSH_HOME}/.credentials.yaml" ]; then
-
-    echo "[DSH] Fixing .credentials.yaml permissions"
-
-    chmod 600 "${DSH_HOME}/.credentials.yaml"
-
-    ls -l "${DSH_HOME}/.credentials.yaml"
-
-fi
-
-
-find "${DSH_HOME}" \
-    -type f \
-    \( \
-        -name ".credentials.yaml" \
-        -o -name "*credentials*.yaml" \
-        -o -name "*credentials*.yml" \
-    \) \
-    -exec chmod 600 {} \; \
-    2>/dev/null || true
-
-
-check_env() {
-
-    local NAME="$1"
-
-    if [ -n "${!NAME:-}" ]; then
-        echo "[PROVIDER] ${NAME}=configured"
-    else
-        echo "[PROVIDER] ${NAME}=NOT SET"
-    fi
-
-}
-
-
-echo
-echo "----------------------------------------------------------"
-echo "[PROVIDER] Western"
-echo "----------------------------------------------------------"
-
-check_env GROQ_API_KEY
-check_env CEREBRAS_API_KEY
-check_env GEMINI_API_KEY
-check_env MISTRAL_API_KEY
-check_env SAMBANOVA_API_KEY
-check_env COHERE_API_KEY
-
-
-echo
-echo "----------------------------------------------------------"
-echo "[PROVIDER] Chinese - FIRST CLASS"
-echo "----------------------------------------------------------"
-
-check_env SILICONFLOW_API_KEY
-check_env MODELSCOPE_API_KEY
-check_env ZAI_API_KEY
-check_env DASHSCOPE_API_KEY
-check_env QIANFAN_API_KEY
-check_env VOLCENGINE_API_KEY
-
-
-echo
-echo "----------------------------------------------------------"
-echo "[PROVIDER] OpenRouter"
-echo "----------------------------------------------------------"
-
-check_env OPENROUTER_API_KEY
-
-
-echo
-echo "----------------------------------------------------------"
-echo "[PROVIDER] Other"
-echo "----------------------------------------------------------"
-
-check_env HF_TOKEN
-check_env NVIDIA_API_KEY
-check_env AGNES_API_KEY
-check_env LLAMA_API_KEY
-
-
-# ==========================================================
-# 5. Verify write access
-# ==========================================================
-
-echo
-echo "=========================================================="
-echo "[5/8] Testing persistent storage"
-echo "=========================================================="
-
-WRITE_TEST="${DSH_HOME}/.write-test"
-
-if ! touch "${WRITE_TEST}"; then
-
-    echo "[ERROR] Cannot write to ${DSH_HOME}"
-
-    exit 1
-
-fi
-
-echo "DSH storage write test OK" > "${WRITE_TEST}"
-
-if ! cat "${WRITE_TEST}" >/dev/null; then
-
-    echo "[ERROR] Cannot read from ${DSH_HOME}"
-
-    exit 1
-
-fi
-
-rm -f "${WRITE_TEST}"
-
-echo "[DSH] /data write: OK"
-echo "[DSH] /data read:  OK"
-
-
-# ==========================================================
-# 5b. Verify restored sessions
-# ==========================================================
-
-echo
-echo "=========================================================="
-echo "[SESSION] Restored session state"
-echo "=========================================================="
-
-SESSION_COUNT=$(
-    find "${DSH_LOCAL_SESSIONS}" \
-        -type f \
-        2>/dev/null \
-        | wc -l \
-        | tr -d ' '
-)
-
-echo "[SESSION] Local session files: ${SESSION_COUNT}"
-
-if [ "${SESSION_COUNT}" -gt 0 ]; then
-
-    echo "[SESSION] Previous sessions restored"
-
-else
-
-    echo "[SESSION] No previous sessions restored"
-
-fi
-
-
-# ==========================================================
-# 6. Show storage state
-# ==========================================================
-
-echo
-echo "=========================================================="
-echo "[6/8] Storage state"
-echo "=========================================================="
-
-echo "[DSH] DSH directory:"
-ls -ld "${DSH_HOME}" || true
-
-echo
-echo "[DSH] Session directory:"
-ls -ld "${DSH_HOME}/sessions" || true
-
-echo
-echo "[DSH] Session target:"
-readlink -f "${DSH_HOME}/sessions" || true
-
-echo
-echo "[DSH] Backup:"
-ls -lh "${DSH_SESSION_BACKUP}" 2>/dev/null || \
-    echo "[SESSION] No backup archive"
-
-echo
-echo "[DSH] Files:"
-ls -la "${DSH_HOME}" || true
-
-echo
-echo "[DSH] Disk:"
-df -h /data || true
-
-echo
-echo "[DSH] Local session disk:"
-df -h /tmp || true
-
-
-# ==========================================================
-# 7. Start DeepSeek Harness
-# ==========================================================
-
-echo
-echo "=========================================================="
-echo "[7/8] Starting DSH Web UI"
-echo "=========================================================="
-
-cd /app/deepseek-harness
-
-DSH_LOG="/tmp/dsh.log"
-
-rm -f "${DSH_LOG}"
-
-echo "[DSH] Starting:"
-echo "pnpm dsh web --host ${DSH_HOST} --port ${DSH_PORT} --trusted-host ${DSH_TRUSTED_HOST} --no-open"
-
-pnpm dsh web \
-    --host "${DSH_HOST}" \
-    --port "${DSH_PORT}" \
-    --trusted-host "${DSH_TRUSTED_HOST}" \
-    --no-open \
-    >"${DSH_LOG}" 2>&1 &
-
-DSH_PID=$!
-
-echo "[DSH] PID=${DSH_PID}"
-echo "[DSH] Waiting for Web UI..."
-
-
-DSH_READY=0
-
-
-for i in $(seq 1 120); do
-
-    if ! kill -0 "${DSH_PID}" 2>/dev/null; then
-
-        echo
-        echo "[DSH] ERROR: DSH exited during startup"
-        echo
-        echo "===== DSH LOG ====="
-
-        cat "${DSH_LOG}" || true
-
-        exit 1
-
-    fi
-
-
-    if curl -sf \
-        "http://${DSH_HOST}:${DSH_PORT}/" \
-        >/dev/null 2>&1
-    then
-
-        DSH_READY=1
-
-        echo "[DSH] Web UI is ready"
-
-        break
-
-    fi
-
-
-    if [ $((i % 10)) -eq 0 ]; then
-
-        echo "[DSH] Still waiting... ${i}/120"
-
-    fi
-
-
-    sleep 1
-
-done
-
-
-if [ "${DSH_READY}" -ne 1 ]; then
-
-    echo
-    echo "[DSH] ERROR: Web UI did not become ready"
-    echo
-    echo "===== DSH LOG ====="
-
-    cat "${DSH_LOG}" || true
-
-    echo
-    echo "===== LISTENING PORTS ====="
-
-    ss -lntp || true
-
-    exit 1
-
-fi
-
-
-# ==========================================================
-# Start background session backup
-#
-# IMPORTANT:
-# Start this AFTER DSH has successfully started.
-# ==========================================================
-
-echo
-echo "=========================================================="
-echo "[SESSION] Starting background persistence"
-echo "=========================================================="
-
-backup_sessions || true
-
-session_backup_loop &
-
-SESSION_BACKUP_PID=$!
-
-echo "[SESSION] Backup PID: ${SESSION_BACKUP_PID}"
-echo "[SESSION] Backup interval: ${DSH_SESSION_SYNC_INTERVAL}s"
-
-
-# ==========================================================
-# DSH diagnostics
-# ==========================================================
-
-echo
-echo "=========================================================="
-echo "[DSH] Process"
-echo "=========================================================="
-
-ps -ef | grep -E "node|dsh" | grep -v grep || true
-
-
-echo
-echo "=========================================================="
-echo "[DSH] Listening ports"
-echo "=========================================================="
-
-ss -lntp || true
-
-
-echo
-echo "=========================================================="
-echo "[DSH] Startup Log"
-echo "=========================================================="
-
-cat "${DSH_LOG}" || true
-
-
-if ! kill -0 "${DSH_PID}" 2>/dev/null; then
-
-    echo
-    echo "[DSH] ERROR: DSH died after startup"
-
-    exit 1
-
-fi
-
-
-# # ==========================================================
-# # DSH UI BASIC AUTHENTICATION
-# # ==========================================================
-
-# echo "[AUTH] Configuring DSH login..."
-
-# : "${DSH_USERNAME:?Missing DSH_USERNAME secret}"
-# : "${DSH_PASSWORD:?Missing DSH_PASSWORD secret}"
-
-# mkdir -p /data/dsh/auth
-
-# HASH=$(openssl passwd -apr1 "$DSH_PASSWORD")
-
-# printf '%s:%s\n' "$DSH_USERNAME" "$HASH" \
-#     > /data/dsh/auth/.htpasswd
-
-# chmod 600 /data/dsh/auth/.htpasswd
-
-# echo "[AUTH] Login configured."
-
-# ==========================================================
-# 8. Start nginx
-# ==========================================================
-
-echo
-echo "=========================================================="
-echo "[8/8] Starting nginx :${PORT}"
-echo "=========================================================="
+# ============================================================
+# VERIFY NGINX
+# ============================================================
+
+echo "[OHAMLAB] Checking Nginx..."
 
 nginx -t
 
+# ============================================================
+# START NGINX
+# ============================================================
+
+echo "[OHAMLAB] Starting Nginx..."
+
 nginx
 
-echo "[NGINX] Started"
-echo "[NGINX] Listening on :${PORT}"
-echo "[NGINX] Proxying to ${DSH_HOST}:${DSH_PORT}"
+# ============================================================
+# START HOURLY BACKUP WORKER
+# ============================================================
 
+hourly_backup &
+BACKUP_PID=$!
 
-# ==========================================================
-# Graceful shutdown
-# ==========================================================
+# ============================================================
+# GRACEFUL SHUTDOWN
+# ============================================================
 
 shutdown() {
 
-    echo
-    echo "=========================================================="
-    echo "[SHUTDOWN] Saving sessions before exit"
-    echo "=========================================================="
+    echo "[OHAMLAB] Shutdown requested."
 
-    # ------------------------------------------------------
-    # Kill backup loop first.
-    # ------------------------------------------------------
+    trap - TERM INT
 
-    if [ -n "${SESSION_BACKUP_PID:-}" ]; then
+    # Stop backup worker
+    if [ -n "${BACKUP_PID}" ]; then
 
-        kill "${SESSION_BACKUP_PID}" 2>/dev/null || true
+        kill "${BACKUP_PID}" 2>/dev/null || true
+
+        wait "${BACKUP_PID}" 2>/dev/null || true
 
     fi
 
+    # Stop Harness
+    if [ -n "${HARNESS_PID}" ]; then
 
-    # ------------------------------------------------------
-    # Final session backup.
-    # ------------------------------------------------------
+        kill -TERM "${HARNESS_PID}" 2>/dev/null || true
 
-    backup_sessions || true
-
-
-    # ------------------------------------------------------
-    # Stop DSH.
-    # ------------------------------------------------------
-
-    if [ -n "${DSH_PID:-}" ]; then
-
-        kill "${DSH_PID}" 2>/dev/null || true
+        wait "${HARNESS_PID}" 2>/dev/null || true
 
     fi
 
+    # Stop Nginx
+    nginx -s quit 2>/dev/null || true
 
-    echo "[SHUTDOWN] Complete"
+    # Final session backup
+    backup_sessions || \
+        echo "[OHAMLAB] WARNING: Final backup failed."
 
+    echo "[OHAMLAB] Shutdown complete."
+
+    exit 0
 }
 
+trap shutdown TERM INT
 
-trap shutdown EXIT
-trap 'exit 0' SIGTERM SIGINT
+# ============================================================
+# LAUNCH OHAMLAB HARNESS
+# ============================================================
 
+echo "=========================================================="
+echo "[OHAMLAB] Launching OhamLab Harness..."
+echo "=========================================================="
+echo "[OHAMLAB] Launching OhamLab Harness..."
 
-# ==========================================================
-# Monitor DSH
-# ==========================================================
+# Paste the full diagnostic block here
 
-while true; do
+ohamlab-harness start &
 
-    if ! kill -0 "${DSH_PID}" 2>/dev/null; then
+HARNESS_PID=$!
 
-        echo
-        echo "=========================================================="
-        echo "[DSH] PROCESS EXITED"
-        echo "=========================================================="
+# Wait for Harness
+set +e
 
-        tail -300 "${DSH_LOG}" || true
+wait "${HARNESS_PID}"
 
-        exit 1
+HARNESS_STATUS=$?
 
-    fi
+set -e
 
-    sleep 5
+# ============================================================
+# CLEANUP AFTER HARNESS EXIT
+# ============================================================
 
-done
+echo "[OHAMLAB] Harness stopped."
+
+# Stop hourly backup worker
+kill "${BACKUP_PID}" 2>/dev/null || true
+
+wait "${BACKUP_PID}" 2>/dev/null || true
+
+# Final backup
+backup_sessions || true
+
+echo "[OHAMLAB] Harness exit status: ${HARNESS_STATUS}"
+
+exit "${HARNESS_STATUS}"
