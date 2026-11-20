@@ -60,6 +60,8 @@ flowchart LR
     AGENT_LAB -->|agent IDs, task results| CLIENT
     CLIENT -->|Agent UI, task submission| WEB
 ```
+<img width="1184" height="566" alt="image" src="https://github.com/user-attachments/assets/4c30e800-2a25-4457-9ca8-0afec6723d08" />
+
 ```
 <img width="1184" height="566" alt="image" src="https://github.com/user-attachments/assets/134aa9da-30fa-4def-bc5e-c8e75151885c" />
 
