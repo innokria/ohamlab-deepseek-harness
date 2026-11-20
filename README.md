@@ -1,40 +1,11 @@
-# DeepSeek Harness
 
-English | [中文](README.zh.md)
-
-DeepSeek Harness (`dsh`) is an open-source agent harness developed by [DeepSeek AI](https://deepseek.com).
 
 ## CLI PYPY
 ```
 pip install ohamlab-harness==0.1.0b1
 ```
 
-It uses an architecture where **everything is a plugin**, and is powered by [Cordis](https://github.com/cordiverse/cordis), whose design is described in [_A Programming Paradigm for Spatiotemporal Composability_](https://github.com/cordiverse/paper).
 
-## use Docker and entrypoint.sh file to load
-## CUSTOM LLM AGENT  
-
-```
-WITH LLAMA CPP and Custom GGUF .  RUNNING ON 2 CORE 16GB CPU 
-```
-
-```
-DeepSeek Harness + llama.cpp
-==========================================================
-[DSH] Home:              /data
-[DSH] Public port:      7860
-[DSH] Internal port:    3080
-
-[LLAMA] Server:         /app/llama-server
-[LLAMA] Host:           127.0.0.1
-[LLAMA] Port:           8000
-[LLAMA] Model:          LFM2.5
-[LLAMA] Model path:     /app/LFM2.5-VL-3B-Q4_0.gguf
-[LLAMA] MMProj path:    /app/mmproj-LFM2.5-VL-3B-BF16.gguf
-[LLAMA] Context:        22288
-[LLAMA] Max tokens:     512
-[LLAMA] Threads:        2
-```
 
 ## UI With Ox Alpha
 <img width="1408" height="658" alt="image" src="https://github.com/user-attachments/assets/7460b85f-da82-4703-8005-ea2b609a80cc" />
@@ -51,98 +22,477 @@ DeepSeek Harness + llama.cpp
 ````
 
 
-## Developer preview
+# OhamLab Harness
 
-DeepSeek Harness is currently in _developer preview_ and is iterating rapidly. **THERE WILL BE COMPATIBILITY-BREAKING CHANGES.**
+**A local-first AI development environment powered by DeepSeek Harness and OhamLab integrations.**
 
-## Run
+OhamLab Harness provides a Python-based installer and launcher for deploying the Harness application together with OhamLab Agent, OhamLab Search and OhamLab branding.
 
-### Run from `npm`
+Install the Python package, provision the application and launch the browser-based interface.
 
-Install `Node.js`, then run:
-
-```sh
-npx @deepseek-ai/dsh web
+```bash
+pip install ohamlab-harness
 ```
 
-The command starts the Web UI at `http://127.0.0.1:3080` by default and opens it in the default browser for a local launch. An SSH launch only prints the host URL because the SSH client or editor owns the local forwarded address. Pass `--no-open` to run the server without opening a browser. See [Web UI guide](docs/user/guide/index.md).
+---
 
-### Run from source
+## What is included?
 
-To run from a repository checkout:
+| Component | Description |
+|---|---|
+| DeepSeek Harness | Core AI harness application and browser UI |
+| OhamLab Agent | Agent execution and agent-lab integration |
+| OhamLab Search | OhamLab search integration |
+| OhamLab Branding | OhamLab web interface branding plugin |
+| Python CLI | Installation, status and startup commands |
 
-```sh
-git clone https://github.com/deepseek-ai/deepseek-harness.git
-cd deepseek-harness
-pnpm install
-pnpm run build
-pnpm dsh web
+The project brings these components together through a single installation workflow while keeping the Harness application and OhamLab integrations separately maintained.
+
+## Architecture
+
+The deployment is designed around three responsibilities.
+
+```text
+                 OhamLab Harness
+                        |
+          +-------------+-------------+
+          |             |             |
+       Python         start.sh       Docker
+       Installer      Runtime        Hosting
+          |             |             |
+          |             |             |
+       Harness       Installation    Node.js
+       Agent         Checks          Python
+       Search        Plugin Repair   pnpm
+       Branding      Service Start   Nginx
+                     Monitoring
 ```
 
-`pnpm run build` prepares the repository artifacts. `pnpm dsh web` uses those built artifacts without rebuilding.
+### Python installer
 
-## Community and support
+The Python package is responsible for provisioning the application and integrations:
 
-- Feel free to submit feedback or bug reports through [GitHub Discussions](https://github.com/deepseek-ai/deepseek-harness/discussions).
-- Add the [`dsh-plugin`](https://github.com/topics/dsh-plugin) topic to your plugin repository for discoverability.
-- Join <a href="https://discord.gg/Ycq5dCaS4">DeepSeek Harness Discord community</a>.
+- Clone and install the selected Harness release.
+- Retrieve the OhamLab integration source.
+- Install OhamLab Agent and its dependencies.
+- Install OhamLab Search and gateway dependencies.
+- Install and activate the OhamLab branding plugin.
+- Build the Harness application.
 
-## Contributing
+### Runtime startup script
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+For container deployments, `deploy/huggingface/start.sh` manages runtime operations:
 
-## Development
+- Check whether installation has already completed.
+- Run the installer when required.
+- Repair optional plugin configuration.
+- Start the Harness web application.
+- Start Nginx as the public-facing reverse proxy.
+- Monitor the running services.
 
-Start with the [development guide](docs/development.md) and [architecture documentation](docs/architecture.md).
+### Docker
 
-For agents, follow [AGENTS.md](AGENTS.md).
+The Docker image provides the runtime environment:
 
+- Node.js 22
+- Python and virtual environment
+- pnpm
+- Git and system dependencies
+- Nginx
+- Container process management
 
-# OhamLab Harness — PyPI release candidate
+Docker does not independently install Agent, Search or Branding. Those responsibilities belong to the Python installer.
 
-**Local-first CLI and browser UI launcher.** The existing `vendor/ohamlab` source is deliberately **not included** in this archive. Merge this repository overlay into your existing GitHub repo. No personal Hugging Face files are included.
+---
 
 ## Requirements
 
-- Python 3.10+
-- Git
-- Node.js 22+
-- pnpm (for example `corepack enable` then `corepack prepare pnpm@11.7.0 --activate`)
-- Internet access for first installation
+For a native installation:
 
-## Test locally before publishing
+- Python 3.9+
+- Node.js 22+
+- Git
+- pnpm 11.7.0 or compatible
+- Internet access for initial installation
+
+Enable pnpm through Corepack:
+
+```bash
+corepack enable
+corepack prepare pnpm@11.7.0 --activate
+```
+
+For Docker deployments, the required runtime dependencies are installed by the image.
+
+---
+
+## Installation
+
+Install the package:
+
+```bash
+python -m pip install ohamlab-harness
+```
+
+Check the installed version:
+
+```bash
+ohamlab-harness --version
+```
+
+Install Harness and OhamLab integrations:
+
+```bash
+ohamlab-harness install
+```
+
+The installer provisions the Harness application and its OhamLab integrations.
+
+### Installation options
+
+The installer supports the following options:
+
+| Option | Description |
+|---|---|
+| `--home` | Custom Harness installation directory |
+| `--repo` | Git repository URL |
+| `--harness-tag` | Harness release tag |
+| `--integration-tag` | OhamLab integration release tag |
+| `--force` | Reinstall an existing Harness installation |
+
+Example using explicit release tags:
+
+```bash
+ohamlab-harness install \
+  --harness-tag 1.0 \
+  --integration-tag 2.0
+```
+
+Example using a custom installation directory:
+
+```bash
+ohamlab-harness install \
+  --home /opt/ohamlab-harness
+```
+
+**Release reproducibility:** Release tags provide a convenient version selection. For strict reproducibility, pin the source revisions to immutable Git commits in the deployment configuration.
+
+---
+
+## Running Harness
+
+Check installation status:
+
+```bash
+ohamlab-harness status
+```
+
+Start the browser application:
+
+```bash
+ohamlab-harness start
+```
+
+The default runtime configuration is:
+
+| Setting | Default |
+|---|---|
+| Harness home | `~/.ohamlab-harness` |
+| DSH home | `~/.ohamlab-harness/data` |
+| Host | `127.0.0.1` |
+| Port | `3080` |
+
+### Environment variables
+
+The launcher supports environment-based configuration.
+
+| Variable | Purpose |
+|---|---|
+| `OHAMLAB_HARNESS_HOME` | Harness installation directory |
+| `DSH_HOME` | Harness data and profile directory |
+| `DSH_HOST` | Local bind address |
+| `DSH_PORT` | Harness web server port |
+| `DSH_TRUSTED_HOST` | Optional trusted host setting |
+| `OHAMLAB_HARNESS_TAG` | Default Harness release tag |
+| `OHAMLAB_INTEGRATION_TAG` | Default integration release tag |
+
+Example:
+
+```bash
+export OHAMLAB_HARNESS_HOME="$HOME/ohamlab"
+export DSH_HOME="$HOME/ohamlab-data"
+export DSH_HOST="127.0.0.1"
+export DSH_PORT="3080"
+
+ohamlab-harness install
+ohamlab-harness start
+```
+
+---
+
+## Hugging Face Docker deployment
+
+The repository includes a Docker deployment under:
+
+```text
+deploy/huggingface/
+```
+
+The deployment uses:
+
+- Node.js 22 as the base runtime.
+- A dedicated Python virtual environment.
+- pnpm for Harness installation and builds.
+- The OhamLab Python installer for application provisioning.
+- The repository startup script for runtime management.
+- Nginx as the external HTTP reverse proxy.
+
+### Deployment architecture
+
+```text
+Hugging Face Docker Space
+          |
+          v
+      Nginx :7860
+          |
+          v
+   Harness :3080
+          |
+          v
+      DSH_HOME
+      /data/dsh
+          |
+     +----+-----+
+     |    |     |
+  Profiles Plugins Sessions
+```
+
+### Persistent data
+
+The Harness data directory is separated from the application installation:
+
+```text
+/app/
+  ohamlab-harness/
+    app/
+    plugins/
+
+/data/
+  dsh/
+    profiles/
+    plugins/
+    sessions/
+    cache/
+    logs/
+```
+
+Mount persistent storage at `/data/dsh` when the hosting platform supports it. This preserves profiles, sessions and plugin configuration across container restarts.
+
+### Build and startup
+
+The Docker image installs system dependencies and the Python package during image construction.
+
+At runtime:
+
+1. `start.sh` checks the installation state.
+2. The Python installer provisions Harness and integrations if needed.
+3. The startup script performs runtime plugin checks and repairs.
+4. Harness starts on the internal port.
+5. Nginx exposes the service on port `7860`.
+
+---
+
+## Project structure
+
+```text
+ohamlab-deepseek-harness/
+│
+├── packages/
+│   └── python/
+│       ├── pyproject.toml
+│       └── src/
+│           └── ohamlab_harness/
+│               ├── __init__.py
+│               ├── cli.py
+│               ├── installer.py
+│               └── runtime.py
+│
+├── deploy/
+│   └── huggingface/
+│       ├── Dockerfile
+│       ├── start.sh
+│       └── nginx.conf
+│
+├── vendor/
+│   └── ohamlab/
+│       ├── plugins/
+│       ├── skills/
+│       └── gateway/
+│
+├── docs/
+│   ├── architecture.md
+│   └── development.md
+│
+├── tests/
+│
+├── AGENTS.md
+└── README.md
+```
+
+---
+
+## Development
+
+Start with the project documentation:
+
+- [Development guide](docs/development.md)
+- [Architecture documentation](docs/architecture.md)
+- [Agent instructions](AGENTS.md)
+
+### Set up a development environment
+
+Clone the repository:
+
+```bash
+git clone https://github.com/innokria/ohamlab-deepseek-harness.git
+
+cd ohamlab-deepseek-harness
+```
+
+Install the Python package in editable mode:
 
 ```bash
 python -m pip install -e packages/python
-python -m pip install pytest build twine
-python -m pytest tests -q
-python -m build packages/python
-python -m twine check packages/python/dist/*
-ohamlab-harness --version
-ohamlab-harness install
-ohamlab-harness doctor
-ohamlab-harness start --open-browser
 ```
 
-By default, `install` clones the **1.0** branch for the upstream Harness application and **main** for your vendor integration. This matches the prior Docker layout but is NOT a reproducible production release. For a pinned build, use `--harness-ref <sha> --vendor-ref <sha>`. To install from your current local vendor directory instead, use `--vendor-path /path/to/vendor/ohamlab`.
+Install development tools:
 
-## Startup and MCP integration
+```bash
+python -m pip install pytest build twine
+```
 
-The launcher defaults to `pnpm dsh web` in the installed Harness directory. This command has not been confirmed against your exact Harness release. If needed, pass `--start-command 'YOUR VERIFIED COMMAND'`. Skills are copied to the data directory and Python gateway dependencies installed into a dedicated virtual environment.
+Run tests:
 
-**Critical:** The current launcher does not automatically register the MCP gateway with Cordis. It does not yet provide remote-to-local MCP failover or guarantee LLM-powered Agent Lab execution. Your existing working Harness registration/setup must be ported and tested before advertising one-command fully integrated MCP support.
+```bash
+python -m pytest tests -q
+```
 
-## Packaging and publishing
+Build the Python distribution:
 
-Builds are produced by `.github/workflows/release.yml`. The PyPI workflow is **manual** (`workflow_dispatch`) and requires configuring PyPI Trusted Publishing for this GitHub repository and `pypi` environment. The version is `0.1.0b1`. Before publishing, verify the package name, license, upstream redistribution permissions, Node startup, and end-to-end tools on a clean machine. Do not publish solely on the basis of Python unit tests.
+```bash
+python -m build packages/python
+```
 
-## Browser support
+Validate the distribution:
 
-`ohamlab-harness start` serves a local browser UI. Public hosted browser service and extension are separate later phases. Do not bind the service to a public address without access controls.
+```bash
+python -m twine check packages/python/dist/*
+```
 
+Test the CLI:
+
+```bash
+ohamlab-harness --version
+ohamlab-harness status
+```
+
+For a full installation test, use a clean environment with Node.js, pnpm and Git available.
+
+---
+
+## PyPI packaging and publishing
+
+The Python package is located at:
+
+```text
+packages/python/
+```
+
+Package metadata and versioning are defined in:
+
+```text
+packages/python/pyproject.toml
+```
+
+Build distributions:
+
+```bash
+python -m build packages/python
+```
+
+Validate:
+
+```bash
+python -m twine check packages/python/dist/*
+```
+
+The repository release workflow is:
+
+```text
+.github/workflows/release.yml
+```
+
+The PyPI publishing workflow uses GitHub Actions and should be configured with PyPI Trusted Publishing.
+
+Before publishing a release:
+
+- Run Python tests.
+- Validate the wheel and source distribution.
+- Test installation on a clean machine.
+- Verify Harness installation and browser startup.
+- Verify Agent and Search integration.
+- Verify branding plugin activation.
+- Test Docker deployment and container restarts.
+- Confirm upstream redistribution and licensing permissions.
+
+Do not treat passing Python unit tests alone as proof of a working deployment.
+
+---
+
+## Security
+
+OhamLab Harness is designed for local-first deployment.
+
+For local installations, keep the service bound to `127.0.0.1` unless remote access is intentionally configured.
+
+For hosted deployments:
+
+- Use an appropriate authentication and access-control layer.
+- Avoid exposing internal service ports directly.
+- Keep persistent data directories protected.
+- Do not commit API keys, credentials or private deployment configuration.
+- Review plugin permissions before enabling third-party integrations.
+
+---
+
+## Roadmap
+
+The project is intended to evolve into a more complete local-first AI development environment.
+
+Potential future areas include:
+
+- Improved offline and local LLM integration.
+- More complete MCP integration and tool discovery.
+- Agent-assisted software development workflows.
+- Automated development and testing workflows.
+- CI/CD integration.
+- Agent-based system monitoring.
+- Enterprise deployment and management.
+
+These are roadmap directions, not claims that every capability is currently implemented.
+
+---
 
 ## License
 
-[MIT](LICENSE)
+See the repository license file for applicable licensing terms.
 
-Third-party dependencies and their licenses are disclosed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+OhamLab integrations and upstream Harness components may have their own licensing and redistribution requirements. Review the relevant upstream licenses before redistributing bundled components.
+
+---
+
+**Repository:** [innokria/ohamlab-deepseek-harness](https://github.com/innokria/ohamlab-deepseek-harness)
+
+**Python package:** [ohamlab-harness on PyPI](https://pypi.org/project/ohamlab-harness/)
+
+**OhamLab:** [ohamlab.com](https://ohamlab.com)
