@@ -1,5 +1,5 @@
 
-"""Install OhamLab Harness and Python integrations without a branding build."""
+"""Install OhamLab Harness and Python integrations with optional branding."""
 
 import json
 import os
@@ -11,9 +11,15 @@ from pathlib import Path
 from .runtime import default_home, executable, require_tools, run
 
 REPO = "https://github.com/innokria/ohamlab-deepseek-harness.git"
-def install(home=None, repo=None, harness_tag=None,
-            integration_tag=None, force=False):
 
+
+def install(
+    home=None,
+    repo=None,
+    harness_tag=None,
+    integration_tag=None,
+    force=False,
+):
     require_tools("git", "node", "pnpm")
 
     pnpm = executable("pnpm")
@@ -75,27 +81,37 @@ def install(home=None, repo=None, harness_tag=None,
             print("[OHAMLAB] Cloning Harness...")
 
             run([
-                "git", "clone",
-                "--branch", harness_tag,
-                "--depth", "1",
-                repo, str(source),
+                "git",
+                "clone",
+                "--branch",
+                harness_tag,
+                "--depth",
+                "1",
+                repo,
+                str(source),
             ])
 
             print("[OHAMLAB] Cloning OhamLab integration...")
 
             run([
-                "git", "clone",
-                "--branch", integration_tag,
-                "--depth", "1",
+                "git",
+                "clone",
+                "--branch",
+                integration_tag,
+                "--depth",
+                "1",
                 "--filter=blob:none",
                 "--sparse",
-                repo, str(integration),
+                repo,
+                str(integration),
             ])
 
             run(
                 [
-                    "git", "sparse-checkout",
-                    "set", "vendor/ohamlab",
+                    "git",
+                    "sparse-checkout",
+                    "set",
+                    "vendor/ohamlab",
                 ],
                 cwd=integration,
             )
@@ -111,8 +127,14 @@ def install(home=None, repo=None, harness_tag=None,
                     )
 
             # Copy OhamLab integration into the Harness source.
-            target_vendor = source / "ohamlab" / "vendor" / "ohamlab"
-            target_vendor.parent.mkdir(parents=True, exist_ok=True)
+            target_vendor = (
+                source / "ohamlab" / "vendor" / "ohamlab"
+            )
+
+            target_vendor.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
 
             if target_vendor.exists():
                 shutil.rmtree(target_vendor)
@@ -129,26 +151,43 @@ def install(home=None, repo=None, harness_tag=None,
             print("[OHAMLAB] Installing Python dependencies...")
 
             run([
-                python, "-m", "pip",
-                "install", "-r", str(requirements),
+                python,
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                str(requirements),
             ])
 
             run([
-                python, "-m", "pip",
+                python,
+                "-m",
+                "pip",
                 "install",
                 "ohamlab-agent==0.1.2",
                 "ohamlab-agent-lab[server]==7.0.0",
             ])
 
-            run([python, "-m", "pip", "check"])
+            run([
+                python,
+                "-m",
+                "pip",
+                "check",
+            ])
 
             # Install Harness dependencies.
             print("[OHAMLAB] Installing Harness dependencies...")
 
-            run([pnpm, "install"], cwd=source)
+            run(
+                [pnpm, "install"],
+                cwd=source,
+            )
 
             # Back up the existing application.
             if app.exists():
+                if backup_app.exists():
+                    shutil.rmtree(backup_app)
+
                 app.rename(backup_app)
                 app_backed_up = True
 
@@ -156,18 +195,85 @@ def install(home=None, repo=None, harness_tag=None,
             shutil.move(str(source), str(app))
             new_app_deployed = True
 
-            # Build Harness without installing the optional branding plugin.
+            # Build Harness.
             print("[OHAMLAB] Building Harness...")
-            run([pnpm, "run", "build"], cwd=app)
+
+            run(
+                [pnpm, "run", "build"],
+                cwd=app,
+            )
 
             print("[OHAMLAB] Harness build completed.")
 
-        # Keep the old installation until all deployment checks pass.
+            # -------------------------------------------------
+            # Install OhamLab branding plugin (best effort).
+            # -------------------------------------------------
+
+            brand_plugin = (
+                app
+                / "ohamlab"
+                / "vendor"
+                / "ohamlab"
+                / "plugins"
+                / "harness-brand"
+            )
+
+            print("[OHAMLAB] Checking branding plugin...")
+
+            if brand_plugin.is_dir():
+                try:
+                    package_json = brand_plugin / "package.json"
+
+                    if not package_json.is_file():
+                        raise RuntimeError(
+                            f"Branding package.json missing: {package_json}"
+                        )
+
+                    print(
+                        "[OHAMLAB] Installing branding plugin..."
+                    )
+
+                    run(
+                        [
+                            pnpm,
+                            "dsh",
+                            "plugin",
+                            "--profile",
+                            "web",
+                            "add",
+                            str(brand_plugin),
+                        ],
+                        cwd=app,
+                    )
+
+                    print(
+                        "[OHAMLAB] Branding plugin installed."
+                    )
+
+                except Exception as exc:
+                    print(
+                        f"[WARNING] Branding installation failed: {exc}"
+                    )
+                    print(
+                        "[WARNING] Continuing without branding."
+                    )
+            else:
+                print(
+                    f"[WARNING] Branding plugin not found: {brand_plugin}"
+                )
+                print(
+                    "[WARNING] Continuing without branding."
+                )
+
+        # Keep the old installation until deployment checks pass.
         if backup_app.exists():
             shutil.rmtree(backup_app)
 
     except Exception:
-        print("[OHAMLAB] Installation failed. Restoring previous app...")
+        print(
+            "[OHAMLAB] Installation failed. "
+            "Restoring previous app..."
+        )
 
         if new_app_deployed and app.exists():
             shutil.rmtree(app)
@@ -180,6 +286,7 @@ def install(home=None, repo=None, harness_tag=None,
     print("========================================")
     print("[OHAMLAB] Installation successful")
     print(f"[OHAMLAB] Harness: {app}")
+    print(f"[OHAMLAB] DSH_HOME: {dsh_home}")
     print("========================================")
 
     return app
