@@ -20,7 +20,49 @@ pip install ohamlab-harness==0.1.0b1
 <img width="2349" height="1410" alt="image" src="https://github.com/user-attachments/assets/0ee7e6ba-751d-4c09-899c-b8b777b6b90f" />
 
 ````
+## Mermaid
+```
+flowchart LR
+    subgraph DSH["DSH (DeepSeek Harness)"]
+        HOST[Host Aggregate]
+        CLIENT[Client Aggregate]
+        WEB[Web App]
+    end
 
+    subgraph ohamlab["ohamlab Ecosystem"]
+        AGENT_AGENT["ohamlab-agent (PyPI: v0.1.2)"]
+        AGENT_LAB["ohamlab-agent-lab (PyPI: v7.0.0)"]
+        SKILLS["Skills Package"]
+        PLUGINS["Plugins (harness-brand)"]
+    end
+
+    subgraph MCP["MCP Layer (Model-Context-Protocol)"]
+        MCP_CLIENT["mcp-client Plugin"]
+        MCP_TOOLS["Registered Tools"]
+    end
+
+    %% Fixed labeled arrows (lines 35-50)
+    DSH -->|Consumes MCP tools| MCP
+    ohamlab -->|Provides MCP tools| MCP
+    AGENT_AGENT -->|Web search, extraction| MCP_CLIENT
+    AGENT_LAB -->|Agent runtime, storage| MCP_CLIENT
+    SKILLS -->|Tool implementations| MCP_CLIENT
+    PLUGINS -->|Branding/customization| HOST
+
+    %% Web search fallback chain (lines 43-45)
+    WEB -->|User queries| web_search["web_search MCP Tool"]
+    web_search -->|Remote: DeepSeek| Remote["DeepSeek MCP Server"]
+    web_search -->|Local fallback: ohamlab search| Local["ohamlab search (PyPI)"]
+
+    %% Agent lifecycle (lines 48-50)
+    HOST -->|Remote contributions, types| AGENT_LAB
+    AGENT_LAB -->|agent IDs, task results| CLIENT
+    CLIENT -->|Agent UI, task submission| WEB
+```
+```
+<img width="1184" height="566" alt="image" src="https://github.com/user-attachments/assets/134aa9da-30fa-4def-bc5e-c8e75151885c" />
+
+```
 
 # OhamLab Harness
 
