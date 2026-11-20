@@ -527,7 +527,45 @@ Potential future areas include:
 These are roadmap directions, not claims that every capability is currently implemented.
 
 ---
-
+## BOT  ROADMAP
+```
+              Telegram User
+                    |
+                    v
+              Telegram Bot
+                    |
+                    v
+                 ask_ai()
+                    |
+                    v
+             System Instructions
+                    |
+                    v
+               OpenRouter API
+                    |
+          +---------+---------+
+          |                   |
+          v                   v
+       LLM Model          Tool Calls
+          |                   |
+          |          +--------+---------+
+          |          |        |         |
+          |          v        v         v
+          |        Search   Python   Memory
+          |          |        |         |
+          |          v        v         v
+          |        Web      Execute   JSON Files
+          |                            |
+          +-------------+--------------+
+                        |
+                        v
+                  Final Answer
+                        |
+              Self-Correction Check
+                        |
+                        v
+                  Telegram Reply
+```
 ## License
 
 See the repository license file for applicable licensing terms.
