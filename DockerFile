@@ -1,0 +1,138 @@
+
+FROM node:22-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# --------------------------------------------------
+# 1. System dependencies
+# --------------------------------------------------
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash git curl ca-certificates nginx \
+    python3 python3-venv python3-pip tar tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# --------------------------------------------------
+# 2. Python environment
+# --------------------------------------------------
+
+RUN python3 -m venv /app/ohamlab-venv
+
+ENV PATH="/app/ohamlab-venv/bin:${PATH}" \
+    OHAM_PYTHON=/app/ohamlab-venv/bin/python \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    OHAMLAB_HARNESS_HOME=/app/ohamlab-harness \
+    OHAMLAB_HARNESS_TAG=1.0 \
+    OHAMLAB_INTEGRATION_TAG=2.0 \
+    DSH_HOME=/data/dsh \
+    DSH_HOST=127.0.0.1 \
+    DSH_PORT=3080 \
+    PORT=7860
+
+# --------------------------------------------------
+# 3. pnpm
+# --------------------------------------------------
+
+RUN corepack enable \
+    && corepack prepare pnpm@11.7.0 --activate \
+    && pnpm config set dangerouslyAllowAllBuilds true
+
+# --------------------------------------------------
+# 4. Install OhamLab Python package from GitHub
+# --------------------------------------------------
+
+ARG OHAMLAB_REPO=https://github.com/innokria/ohamlab-deepseek-harness.git
+ARG OHAMLAB_BRANCH=main
+
+RUN git clone --depth 1 \
+    --branch "${OHAMLAB_BRANCH}" \
+    "${OHAMLAB_REPO}" \
+    /tmp/ohamlab-source \
+    && python -m pip install --upgrade pip \
+    && python -m pip install /tmp/ohamlab-source/packages/python \
+    && ohamlab-harness --version
+
+# --------------------------------------------------
+# 5. Use repository startup script
+# --------------------------------------------------
+
+RUN test -f /tmp/ohamlab-source/deploy/huggingface/start.sh \
+    && cp /tmp/ohamlab-source/deploy/huggingface/start.sh \
+       /usr/local/bin/start.sh \
+    && chmod +x /usr/local/bin/start.sh \
+    && bash -n /usr/local/bin/start.sh \
+    && rm -rf /tmp/ohamlab-source
+
+# --------------------------------------------------
+# 6. Persistent directories
+# --------------------------------------------------
+
+RUN mkdir -p \
+    /data/dsh/plugins \
+    /data/dsh/profiles \
+    /data/dsh/sessions \
+    /data/dsh/session-backup \
+    /data/dsh/cache \
+    /data/dsh/logs \
+    /app/ohamlab-harness
+
+# --------------------------------------------------
+# 7. Nginx configuration
+# --------------------------------------------------
+
+RUN cat > /etc/nginx/nginx.conf <<'NGINX'
+worker_processes auto;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    sendfile on;
+    keepalive_timeout 65;
+
+    server {
+        listen 7860;
+        server_name _;
+
+        client_max_body_size 100M;
+
+        location / {
+            proxy_pass http://127.0.0.1:3080;
+            proxy_http_version 1.1;
+
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+
+            proxy_read_timeout 3600;
+            proxy_send_timeout 3600;
+        }
+    }
+}
+NGINX
+
+# --------------------------------------------------
+# 8. Validate configuration
+# --------------------------------------------------
+
+RUN nginx -t \
+    && test -x /usr/local/bin/start.sh
+
+# --------------------------------------------------
+# 9. Start
+# --------------------------------------------------
+
+EXPOSE 7860
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+CMD ["/usr/local/bin/start.sh"]
