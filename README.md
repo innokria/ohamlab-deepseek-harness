@@ -17,7 +17,8 @@ pip install ohamlab-harness==0.1.0b1
 
 
 ```
-<img width="2349" height="1410" alt="image" src="https://github.com/user-attachments/assets/0ee7e6ba-751d-4c09-899c-b8b777b6b90f" />
+<img width="1184" height="566" alt="image" src="https://github.com/user-attachments/assets/adbc4646-d929-4d16-bb64-25f872ac84a8" />
+
 
 ````
 ## Mermaid
