@@ -12,6 +12,36 @@
  * Function to add audio button next to skill picker
  * This integrates with the existing DSH UI framework
  */
+
+let voiceInstalled = false;
+
+export function installVoiceControls() {
+  if (
+    typeof document === 'undefined' ||
+    typeof window === 'undefined'
+  ) return;
+
+  if (voiceInstalled) return;
+  voiceInstalled = true;
+
+  const mount = () => {
+    if (!document.getElementById('ohamlab-voice-float-btn')) {
+      createFallbackVoiceControls();
+    }
+
+    addAudioButtonNextToSkillPicker();
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener(
+      'DOMContentLoaded',
+      mount,
+      { once: true }
+    );
+  } else {
+    mount();
+  }
+}
 function addAudioButtonNextToSkillPicker() {
   // Wait for the skill picker to be ready
   const checkInterval = setInterval(() => {
